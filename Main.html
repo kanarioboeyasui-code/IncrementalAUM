@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Factor Fund (Mobile)</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    body{font-family:'Noto Sans JP',sans-serif;background:#0b0f19;color:#e5e7eb;overflow:hidden;user-select:none;-webkit-tap-highlight-color:transparent}
+    @keyframes jump{0%{transform:translate(-50%,-50%) scale(.6);opacity:0}20%{transform:translate(-50%,-140%) scale(1.1);opacity:1}100%{transform:translate(-50%,-280%) scale(1);opacity:0}}
+    .float{position:absolute;pointer-events:none;animation:jump 1.15s ease-out forwards;font-weight:900;text-shadow:0 4px 8px rgba(0,0,0,.9);z-index:100;white-space:nowrap}
+    @keyframes fly{0%{transform:translate(0,0) scale(1);opacity:1}100%{transform:translate(var(--tx),var(--ty)) scale(.5);opacity:0}}
+    .fly{position:absolute;pointer-events:none;z-index:100;animation:fly .75s cubic-bezier(.5,0,.5,1) forwards}
+    @keyframes pulse{0%{border-color:rgba(234,179,8,1);box-shadow:0 0 0 0 rgba(234,179,8,.7)}50%{border-color:#facc15;box-shadow:0 0 18px 10px rgba(234,179,8,.55)}100%{border-color:rgba(234,179,8,1);box-shadow:0 0 0 0 rgba(234,179,8,0)}}
+    @keyframes bounce{0%,100%{transform:translateX(-50%) translateY(0)}50%{transform:translateX(-50%) translateY(10px)}}
+    .hl{animation:pulse 1s infinite !important;border:2px solid #eab308 !important;background:rgba(234,179,8,.06)!important;position:relative;z-index:50}
+    .arrow{position:absolute;top:-30px;left:50%;transform:translateX(-50%);font-size:26px;animation:bounce 1s infinite;z-index:100;filter:drop-shadow(0 2px 4px rgba(0,0,0,1));pointer-events:none}
+    @keyframes ticker{0%{transform:translateX(100%)}100%{transform:translateX(-100%)}}
+    ::-webkit-scrollbar{width:4px;height:4px}
+    ::-webkit-scrollbar-track{background:#0f172a}
+    ::-webkit-scrollbar-thumb{background:#334155;border-radius:2px}
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef, useCallback } = React;
+
+    // ---- tiny tests (keep) ----
+    const clampDt = (dt) => Math.min(0.10, Math.max(0.02, dt));
+    console.assert(clampDt(0.001) === 0.02, 'clampDt min failed');
+    console.assert(clampDt(0.5) === 0.10, 'clampDt max failed');
+
+    // ---- Error Boundary ----
+    class ErrorBoundary extends React.Component {
+      constructor(p){ super(p); this.state={hasError:false,error:null}; }
+      static getDerivedStateFromError(e){ return {hasError:true,error:e}; }
+      componentDidCatch(e,info){ console.error('Game crashed:',e,info); }
+      render(){
+        if(this.state.hasError){
+          return (
+            <div className="h-screen w-full bg-red-900 text-white p-6 flex flex-col items-center justify-center overflow-auto">
+              <h1 className="text-2xl font-bold mb-3">⚠️ SYSTEM FAILURE</h1>
+              <div className="text-xs mb-4 max-w-lg overflow-auto max-h-48 whitespace-pre-wrap">{String(this.state.error)}</div>
+              <button onClick={() => window.location.reload()} className="mt-4 bg-white text-red-900 font-bold py-2 px-6 rounded">RELOAD</button>
+            </div>
+          );
+        }
+        return this.props.children;
+      }
+    }
+
+    // ---- helpers ----
+    const SUFFIXES = ["","k","M","B","T","Qa","Qi","Sx","Sp","Oc","No","Dc"];
+    const fmt = (n) => {
+      if(n==null) return '0';
+      if(typeof n!=='number') return 'NaN';
+      if(!Number.isFinite(n)) return 'MAX';
+      if(n<1000) return (Math.floor(n*100)/100).toString();
+      const tier = (Math.log10(Math.abs(n))/3)|0;
+      if(tier<=0) return String(Math.floor(n));
+      const s = SUFFIXES[Math.min(tier, SUFFIXES.length-1)];
+      const scale = Math.pow(10, tier*3);
+      return (n/scale).toFixed(2)+s;
+    };
+
+    // DPR-safe canvas fit
+    const fitCanvasToParent = (canvas) => {
+      const parent = canvas?.parentElement;
+      if(!canvas || !parent) return;
+      const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+      const cssW = Math.max(1, parent.clientWidth);
+      const cssH = Math.max(1, parent.clientHeight);
+      canvas.style.width = cssW+'px';
+      canvas.style.height = cssH+'px';
+      canvas.width = Math.floor(cssW*dpr);
+      canvas.height = Math.floor(cssH*dpr);
+      const ctx = canvas.getContext('2d');
+      if(ctx) ctx.setTransform(dpr,0,0,dpr,0,0);
+    };
+
+    // Game calculation helpers
+    const calcCost = (baseCost, costFactor, level) => baseCost * Math.pow(costFactor || 1, level);
+    const calcValue = (baseValue, level, multiplier = 1.1) => baseValue * Math.pow(multiplier, level);
+
+    // ---- Game content ----
+    const FACTORS = [
+      { id:'beta', name:'Market Beta', threshold: 10, color:'#3b82f6', waveFreq:0.02, waveAmp:30 },
+      { id:'size', name:'Size', threshold: 80, color:'#4ade80', waveFreq:0.05, waveAmp:20 },
+      { id:'value', name:'Value', threshold: 200, color:'#fbbf24', waveFreq:0.08, waveAmp:15 },
+      { id:'momentum', name:'Momentum', threshold: 500, color:'#ef4444', waveFreq:0.10, waveAmp:18 },
+      { id:'quality', name:'Quality', threshold: 1200, color:'#8b5cf6', waveFreq:0.12, waveAmp:16 },
+      { id:'lowvol', name:'Low Volatility', threshold: 3000, color:'#06b6d4', waveFreq:0.14, waveAmp:14 },
+      { id:'dividend', name:'Dividend Yield', threshold: 8000, color:'#10b981', waveFreq:0.16, waveAmp:12 },
+      { id:'profitability', name:'Profitability', threshold: 20000, color:'#f59e0b', waveFreq:0.18, waveAmp:10 },
+      { id:'earnings', name:'Earnings Yield', threshold: 50000, color:'#6366f1', waveFreq:0.20, waveAmp:8 },
+      { id:'nonlinear', name:'NonLinear', threshold: 120000, color:'#ec4899', waveFreq:0.22, waveAmp:10 },
+      { id:'alphaomega', name:'AlphaOmega (ESG)', threshold: 300000, color:'#ffffff', waveFreq:0.25, waveAmp:40 },
+    ];
+
+    const UPGRADES = [
+      // data (produce DATA/s)
+      { id:'intern', category:'data', name:'インターン', desc:'手動入力を支援。', baseCostAum: 30, costFactor:1.45, effectVal:1, icon:'📝' },
+      { id:'scraper', category:'data', name:'Webスクレイパー', desc:'ネットから自動収集。', baseCostAum: 300, costFactor:1.55, effectVal:10, icon:'🕷️' },
+      { id:'data_warehouse', category:'data', name:'データウェアハウス', desc:'大規模データストレージ。', baseCostAum: 3000, costFactor:1.6, effectVal:100, icon:'🏢' },
+      { id:'satellite', category:'data', name:'衛星フィード', desc:'衛星データをリアルタイム取得。', baseCostAum: 30000, costFactor:1.65, effectVal:1000, icon:'🛰️' },
+      { id:'quantum_db', category:'data', name:'量子データベース', desc:'量子コンピュータでデータ処理。', baseCostAum: 300000, costFactor:1.7, effectVal:10000, icon:'⚛️' },
+      { id:'akashic', category:'data', name:'アカシックレコード', desc:'アカシックレコードにアクセス。', baseCostAum: 3000000, costFactor:1.75, effectVal:100000, icon:'📜' },
+
+      // research (consume DATA -> produce RESEARCH/s)
+      { id:'analyst', category:'research', name:'アナリスト', desc:'DATAを分析してRESEARCHへ。', baseCostAum: 80, costFactor:1.55, inputNoise:2, outputResearch:1, icon:'📊' },
+      { id:'ml_cluster', category:'research', name:'MLクラスター', desc:'高速分析基盤。', baseCostAum: 1200, costFactor:1.65, inputNoise:18, outputResearch:12, icon:'🖥️' },
+      { id:'quantum_lab', category:'research', name:'量子ラボ', desc:'量子アルゴリズムで解析。', baseCostAum: 15000, costFactor:1.7, inputNoise:200, outputResearch:150, icon:'🔬' },
+      { id:'ai_supermind', category:'research', name:'AIスーパーマインド', desc:'超知能AIによる分析。', baseCostAum: 200000, costFactor:1.75, inputNoise:2000, outputResearch:2000, icon:'🤖' },
+      { id:'dimensional_rift', category:'research', name:'次元リフト', desc:'次元を超えた研究。', baseCostAum: 2500000, costFactor:1.8, inputNoise:20000, outputResearch:25000, icon:'🌀' },
+
+      // strategy (creates opportunities) - 各戦略は発見したファクターに関連する
+      { id:'index_fund', category:'strategy', name:'インデックスファンド', reqFactor:'beta', desc:'市場連動で機会が出現。', baseCostAum: 250, baseCostResearch: 5, costFactor:1.6, passiveYield:0.004, baseValue: 5000, frequency:0.06, icon:'📈' },
+      { id:'small_cap_fund', category:'strategy', name:'スモールキャップファンド', reqFactor:'size', desc:'小型株効果を狙う。', baseCostAum: 1200, baseCostResearch: 25, costFactor:1.7, passiveYield:0.007, baseValue: 18000, frequency:0.07, icon:'🐜' },
+      { id:'value_fund', category:'strategy', name:'バリューファンド', reqFactor:'value', desc:'割安株を拾う。', baseCostAum: 8000, baseCostResearch: 120, costFactor:1.75, passiveYield:0.010, baseValue: 65000, frequency:0.08, icon:'💎' },
+      { id:'momentum_fund', category:'strategy', name:'モメンタムファンド', reqFactor:'momentum', desc:'勢いのある銘柄を追う。', baseCostAum: 50000, baseCostResearch: 600, costFactor:1.8, passiveYield:0.015, baseValue: 250000, frequency:0.09, icon:'🚀' },
+      { id:'quality_fund', category:'strategy', name:'クオリティファンド', reqFactor:'quality', desc:'高品質な企業を選別。', baseCostAum: 400000, baseCostResearch: 5000, costFactor:1.85, passiveYield:0.020, baseValue: 1500000, frequency:0.10, icon:'⭐' },
+      { id:'lowvol_fund', category:'strategy', name:'低ボラティリティファンド', reqFactor:'lowvol', desc:'低ボラティリティ銘柄を選別。', baseCostAum: 5000000, baseCostResearch: 60000, costFactor:1.9, passiveYield:0.030, baseValue: 20000000, frequency:0.12, icon:'🌊' },
+      { id:'dividend_fund', category:'strategy', name:'配当利回りファンド', reqFactor:'dividend', desc:'高配当銘柄に投資。', baseCostAum: 50000000, baseCostResearch: 600000, costFactor:1.95, passiveYield:0.040, baseValue: 150000000, frequency:0.14, icon:'💰' },
+      { id:'profitability_fund', category:'strategy', name:'収益性ファンド', reqFactor:'profitability', desc:'高収益企業を選別。', baseCostAum: 500000000, baseCostResearch: 6000000, costFactor:2.0, passiveYield:0.050, baseValue: 1000000000, frequency:0.16, icon:'📊' },
+      { id:'earnings_fund', category:'strategy', name:'収益率ファンド', reqFactor:'earnings', desc:'高収益率銘柄に投資。', baseCostAum: 5000000000, baseCostResearch: 60000000, costFactor:2.05, passiveYield:0.060, baseValue: 8000000000, frequency:0.18, icon:'💹' },
+      { id:'hedge_fund', category:'strategy', name:'ヘッジファンド', reqFactor:'nonlinear', desc:'非線形戦略で利益を追求。', baseCostAum: 50000000000, baseCostResearch: 600000000, costFactor:2.1, passiveYield:0.070, baseValue: 60000000000, frequency:0.20, icon:'🎯' },
+      { id:'alphaomega_fund', category:'strategy', name:'AlphaOmega (ESG) ファンド', reqFactor:'alphaomega', desc:'ESGを統合した究極の戦略。', baseCostAum: 500000000000, baseCostResearch: 6000000000, costFactor:2.15, passiveYield:0.100, baseValue: 500000000000, frequency:0.25, icon:'🌍' },
+    ];
+
+    const NEWS = [
+      'Market Update: factor crowding detected.',
+      'Breaking: “AI says buy” trend spikes.',
+      'Quant gossip: volatility smiles back.',
+      'Macro: rates do a barrel roll.',
+    ];
+
+    const calcRates = (s) => {
+      const lvl = (id) => s.levels[id] || 0;
+
+      // DATA production
+      let dataProd = 0;
+      for(const u of UPGRADES){ if(u.category==='data') dataProd += (u.effectVal||0) * lvl(u.id); }
+
+      // RESEARCH production (DATA consumption)
+      let dataCons = 0, resProd = 0;
+      for(const u of UPGRADES){
+        if(u.category==='research'){
+          dataCons += (u.inputNoise||0) * lvl(u.id);
+          resProd += (u.outputResearch||0) * lvl(u.id);
+        }
+      }
+
+      // passive yield from strategies
+      let passive = 0.001;
+      for(const u of UPGRADES){ if(u.category==='strategy') passive += (u.passiveYield||0) * lvl(u.id); }
+
+      const netData = dataProd - dataCons;
+
+      // taps (base value + bonus from production)
+      const clickData = 10 + dataProd * 0.2;
+      const clickRes = 5 + resProd * 0.15;
+      const clickResCost = Math.max(10, clickRes * 2);
+
+      return {
+        dataProd, dataCons, resProd, netData,
+        passive,
+        clickData, clickRes, clickResCost,
+      };
+    };
+
+    // ---- UI bits ----
+    const Modal = ({ title, body, buttonText, onConfirm, icon }) => (
+      <div className="absolute inset-0 bg-black/90 z-[100] flex items-center justify-center p-4 backdrop-blur">
+        <div className="bg-gray-900 border-2 border-blue-500/50 p-6 rounded-xl max-w-lg w-full flex flex-col items-center text-center shadow-2xl">
+          <div className="text-6xl mb-4">{icon||'✨'}</div>
+          <h3 className="text-2xl font-bold mb-4 text-white">{title}</h3>
+          <div className="text-gray-300 mb-6 leading-relaxed whitespace-pre-line text-base">{body}</div>
+          <button onClick={onConfirm} className="font-bold py-3 px-8 rounded-full w-full bg-blue-600 text-white">{buttonText||'OK'}</button>
+        </div>
+      </div>
+    );
+
+    const ResourceItem = ({ label, value, subValue, subColor }) => (
+      <div className="flex flex-col items-start min-w-[86px]">
+        <div className="text-[10px] text-gray-500 font-mono tracking-widest">{label}</div>
+        <div className="text-xl font-mono text-white font-bold leading-none">{value}</div>
+        <div className={`text-[10px] font-mono ${subColor}`}>{subValue}</div>
+      </div>
+    );
+
+    const ActionButton = ({ icon, label, sub, onClick, disabled, highlight, active, tone='dark' }) => (
+      <button
+        onClick={onClick}
+        disabled={disabled}
+        className={`relative flex-1 min-h-[60px] rounded-xl border px-2 py-2 flex flex-col items-center justify-center gap-0.5 transition-all active:scale-[0.99] select-none ${
+          active ? 'bg-yellow-800/35 border-yellow-500' : tone==='blue' ? 'bg-blue-900/30 border-blue-500/40' : 'bg-gray-900/40 border-gray-700'
+        } ${disabled ? 'opacity-45' : ''} ${highlight ? 'hl' : ''}`}
+      >
+        <div className="text-2xl leading-none">{icon}</div>
+        <div className="text-[11px] font-mono font-black tracking-wide text-gray-100">{label}</div>
+        {sub && <div className="text-[10px] font-mono text-gray-300">{sub}</div>}
+        {highlight && <div className="arrow">👇</div>}
+      </button>
+    );
+
+    const Flying = ({ startX, startY, targetX, targetY }) => (
+      <div className="fly" style={{ left:startX, top:startY, '--tx': `${targetX-startX}px`, '--ty': `${targetY-startY}px`, fontSize:'24px' }}>💰</div>
+    );
+
+    // ---- Canvases ----
+    const WaveCanvas = ({ unlockedFactors }) => {
+      const canvasRef = useRef(null);
+      const factorsRef = useRef(unlockedFactors);
+      useEffect(() => { factorsRef.current = unlockedFactors; }, [unlockedFactors]);
+
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        if(!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if(!ctx) return;
+
+        let raf = 0;
+        let t = 0;
+        const resize = () => fitCanvasToParent(canvas);
+
+        const draw = () => {
+          const w = canvas.clientWidth;
+          const h = canvas.clientHeight;
+          if(w<=0||h<=0){ raf=requestAnimationFrame(draw); return; }
+
+          t += 0.05;
+
+          // solid bg
+          ctx.clearRect(0,0,w,h);
+          ctx.fillStyle = '#000';
+          ctx.fillRect(0,0,w,h);
+
+          // grid
+          ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          for(let x=0;x<w;x+=40){ ctx.moveTo(x,0); ctx.lineTo(x,h); }
+          for(let y=0;y<h;y+=30){ ctx.moveTo(0,y); ctx.lineTo(w,y); }
+          ctx.stroke();
+
+          const centerY = h/2;
+          const unlocked = factorsRef.current || [];
+
+          // noise
+          ctx.beginPath();
+          ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+          ctx.lineWidth = 1;
+          for(let x=0;x<w;x++){
+            let y = (Math.random()-0.5)*16;
+            for(const f of unlocked){ y += Math.sin(x*f.waveFreq + t*(f.waveFreq*10))* (f.waveAmp*0.25); }
+            if(x===0) ctx.moveTo(x, centerY+y); else ctx.lineTo(x, centerY+y);
+          }
+          ctx.stroke();
+
+          // factor waves
+          for(let i=0;i<unlocked.length;i++){
+            const f = unlocked[i];
+            ctx.beginPath();
+            ctx.strokeStyle = f.color;
+            ctx.lineWidth = 2;
+            for(let x=0;x<w;x++){
+              const y = Math.sin(x*f.waveFreq + t*(f.waveFreq*15) + i) * f.waveAmp;
+              if(x===0) ctx.moveTo(x, centerY+y); else ctx.lineTo(x, centerY+y);
+            }
+            ctx.stroke();
+          }
+
+          raf = requestAnimationFrame(draw);
+        };
+
+        window.addEventListener('resize', resize);
+        resize();
+        draw();
+        return () => { window.removeEventListener('resize', resize); cancelAnimationFrame(raf); };
+      }, []);
+
+      return <canvas ref={canvasRef} className="absolute inset-0" />;
+    };
+
+    const OpportunityCanvas = ({ opportunities }) => {
+      const canvasRef = useRef(null);
+      const oppRef = useRef(opportunities);
+      useEffect(() => { oppRef.current = opportunities; }, [opportunities]);
+
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        if(!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if(!ctx) return;
+
+        let raf = 0;
+        const resize = () => fitCanvasToParent(canvas);
+
+        const draw = () => {
+          const w = canvas.clientWidth;
+          const h = canvas.clientHeight;
+          if(w<=0||h<=0){ raf=requestAnimationFrame(draw); return; }
+
+          ctx.clearRect(0,0,w,h);
+          const centerY = h/2;
+          const ops = oppRef.current || [];
+
+          for(const op of ops){
+            const size = 8 + (Math.log10(Math.max(1, op.val||1))*0.8);
+            const s = op.status==='exploding' ? size*op.scale : size;
+            const a = op.status==='exploding' ? Math.max(0, 1 - (op.scale-1)/1.5) : 1;
+            ctx.globalAlpha = a;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = op.color;
+            ctx.fillStyle = op.color;
+            ctx.beginPath();
+            ctx.arc(op.x, centerY, s, 0, Math.PI*2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = `rgba(255,255,255,${a})`;
+            ctx.font = `${Math.floor(12*(op.status==='exploding'?op.scale:1))}px monospace`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('💰', op.x, centerY);
+            ctx.globalAlpha = 1;
+          }
+
+          // center line
+          ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([5,5]);
+          ctx.beginPath();
+          ctx.moveTo(w/2, 0);
+          ctx.lineTo(w/2, h);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          raf = requestAnimationFrame(draw);
+        };
+
+        window.addEventListener('resize', resize);
+        resize();
+        draw();
+        return () => { window.removeEventListener('resize', resize); cancelAnimationFrame(raf); };
+      }, []);
+
+      return <canvas ref={canvasRef} className="absolute inset-0 pointer-events-none" />;
+    };
+
+    function App(){
+      const [state, setState] = useState({
+        phase: 'start',
+        noise: 0,       // DATA
+        research: 0,    // RESEARCH
+        aum: 1000,      // $AUM
+        levels: {},
+        unlockedTabs: ['data'],
+        discoveredFactorIds: [],
+        fundraiseCount: 0,
+        region: 0,      // 現在の地域（0=初期地域）
+      });
+
+      const [activeTab, setActiveTab] = useState('data');
+      const [modal, setModal] = useState(null);
+      const [ticker, setTicker] = useState(NEWS[0]);
+      const [isAuto, setIsAuto] = useState(false);
+      const [opps, setOpps] = useState([]);
+      const [floats, setFloats] = useState([]);
+      const [flys, setFlys] = useState([]);
+
+      const stateRef = useRef(state);
+      const autoRef = useRef(isAuto);
+      const lastLoopRef = useRef(Date.now());
+      useEffect(() => { stateRef.current = state; }, [state]);
+      useEffect(() => { autoRef.current = isAuto; }, [isAuto]);
+
+      const rates = useMemo(() => calcRates(state), [state]);
+      const nextFactor = useMemo(() => FACTORS.find(f => !state.discoveredFactorIds.includes(f.id)), [state.discoveredFactorIds]);
+      const unlockedFactors = useMemo(() => FACTORS.filter(f => state.discoveredFactorIds.includes(f.id)), [state.discoveredFactorIds]);
+
+      const spawnFloat = useCallback((text, color, x, y) => {
+        const id = Date.now()+Math.random();
+        setFloats(p => [...p, {id, text, color, x, y, fontSize: `${Math.floor(12*(0.9+Math.random()*0.4))}px`}]);
+        setTimeout(() => setFloats(p => p.filter(i => i.id!==id)), 1200);
+      }, []);
+
+      const spawnFly = useCallback((startX, startY) => {
+        const el = document.getElementById('aum-anchor');
+        if(!el) return;
+        const r = el.getBoundingClientRect();
+        const targetX = r.left + r.width/2;
+        const targetY = r.top + r.height/2;
+        const id = Date.now()+Math.random();
+        setFlys(p => [...p, {id, startX, startY, targetX, targetY}]);
+        setTimeout(() => setFlys(p => p.filter(i => i.id!==id)), 800);
+      }, []);
+
+      // modal start
+      useEffect(() => {
+        if(state.phase==='start'){
+          setModal({
+            title: '⚡ 運用会社を立ち上げよう ⚡',
+            body: `市場のノイズの海から、黄金のファクターを発見せよ。
+
+📊 データを集め、研究を重ね
+🔬 隠された市場の法則を解明し
+💰 世界最大の運用会社を目指せ！`,
+            buttonText: '🚀 運用開始',
+            icon: '📈',
+            onConfirm: () => setState(p => ({...p, phase:'running'}))
+          });
+        }
+      }, [state.phase]);
+
+      // ticker
+      useEffect(() => {
+        const t = setInterval(() => setTicker(NEWS[(Math.random()*NEWS.length)|0]), 8000);
+        return () => clearInterval(t);
+      }, []);
+
+      // unlock tabs
+      const noise = state.noise || 0;
+      const discoveredFactorIdsStr = state.discoveredFactorIds.join(',');
+      const unlockedTabsStr = state.unlockedTabs.join(',');
+      useEffect(() => {
+        if(noise >= 10 && !state.unlockedTabs.includes('research')){
+          setState(p => p.unlockedTabs.includes('research') ? p : ({...p, unlockedTabs:[...p.unlockedTabs,'research']}));
+        }
+        if(state.discoveredFactorIds.includes('beta') && !state.unlockedTabs.includes('strategy')){
+          setState(p => p.unlockedTabs.includes('strategy') ? p : ({...p, unlockedTabs:[...p.unlockedTabs,'strategy']}));
+        }
+      }, [noise, discoveredFactorIdsStr, unlockedTabsStr]);
+
+      // factor discovery celebration
+      const prevFactorIdsRef = useRef([]);
+      useEffect(() => {
+        if(state.phase === 'running' && state.discoveredFactorIds.length > prevFactorIdsRef.current.length){
+          const newFactorId = state.discoveredFactorIds.find(id => !prevFactorIdsRef.current.includes(id));
+          if(newFactorId){
+            const newFactor = FACTORS.find(f => f.id === newFactorId);
+            if(newFactor){
+              const isAlphaOmega = newFactorId === 'alphaomega';
+              setModal({
+                title: '✨ ファクター発見！ ✨',
+                body: isAlphaOmega ? `${newFactor.name}を発見しました！
+
+すべての投資戦略が解放されました。
+新しい地域への参入が可能になりました！` : `${newFactor.name}を発見しました！
+
+新しい投資戦略が解放されます。`,
+                buttonText: '🚀 続ける',
+                icon: '🌟',
+                onConfirm: () => setModal(null)
+              });
+              // フローティングテキストを複数表示
+              setTimeout(() => spawnFloat('🌟', newFactor.color, window.innerWidth/2, window.innerHeight/2), 100);
+              setTimeout(() => spawnFloat('FACTOR DISCOVERED!', newFactor.color, window.innerWidth/2, window.innerHeight/2 + 30), 200);
+              setTimeout(() => spawnFloat(newFactor.name, newFactor.color, window.innerWidth/2, window.innerHeight/2 + 60), 300);
+            }
+          }
+        }
+        prevFactorIdsRef.current = [...state.discoveredFactorIds];
+      }, [state.discoveredFactorIds, state.phase, spawnFloat]);
+
+      // guidance
+      const guidance = useMemo(() => {
+        if(isAuto) return null; // AUTOがONならガイダンスを消す
+        if(!(state.levels.intern>0)) return { text:'DATAでインターンカードをタップして採用', highlight:'card-intern' };
+        if(!state.unlockedTabs.includes('research')) return { text:'収集でDATAを10集めてR&Dを解放', highlight:'action-collect' };
+        if(!(state.levels.analyst>0)) return { text:'R&Dでアナリストを採用（DATA→RESEARCH）', highlight:'card-analyst' };
+        if(!state.discoveredFactorIds.includes('beta')) return { text:'分析でDATA→RESEARCH、Betaを発見', highlight:'action-analyze' };
+        if(!(state.levels.index_fund>0)) return { text:'STRATでインデックスファンドをタップして開始', highlight:'card-index_fund' };
+        return { text:'AUTOをONにすると機会(💰)が自動で回収される！', highlight:'action-auto' };
+      }, [state, isAuto]);
+
+      // keep tab aligned during tutorial
+      const internLevel = state.levels.intern || 0;
+      const analystLevel = state.levels.analyst || 0;
+      const indexFundLevel = state.levels.index_fund || 0;
+      const unlockedTabsStr2 = state.unlockedTabs.join(',');
+      useEffect(() => {
+        if(internLevel === 0 && activeTab!=='data') {
+          setActiveTab('data');
+        } else if(state.unlockedTabs.includes('research') && analystLevel === 0 && activeTab!=='research') {
+          setActiveTab('research');
+        } else if(state.unlockedTabs.includes('strategy') && indexFundLevel === 0 && activeTab!=='strategy') {
+          setActiveTab('strategy');
+        }
+      }, [internLevel, analystLevel, indexFundLevel, unlockedTabsStr2, activeTab]);
+
+      // purchase
+      const buy = (u, event) => {
+        const lvl = state.levels[u.id] || 0;
+        const costA = calcCost(u.baseCostAum || 0, u.costFactor, lvl);
+        const costR = calcCost(u.baseCostResearch || 0, u.costFactor, lvl);
+        if(state.aum < costA || state.research < costR) return;
+        
+        // 購入位置を取得（クリック位置または画面中央）
+        const x = event?.clientX || window.innerWidth/2;
+        const y = event?.clientY || window.innerHeight/2;
+        const isFirstPurchase = lvl === 0;
+        
+        setState(p => ({
+          ...p,
+          aum: (p.aum||0) - costA,
+          research: Math.max(0, (p.research||0) - costR),
+          levels: {...p.levels, [u.id]: (p.levels[u.id]||0)+1}
+        }));
+        
+        // 派手な演出
+        if(isFirstPurchase){
+          // 初回購入はモーダル＋特別な演出
+          setModal({
+            title: '✨ 新規採用！ ✨',
+            body: `${u.name}を採用しました！
+
+${u.desc}
+
+新しいパワーが解禁されます。`,
+            buttonText: '🚀 続ける',
+            icon: u.icon,
+            onConfirm: () => setModal(null)
+          });
+          // フローティングテキストを複数表示
+          setTimeout(() => spawnFloat(u.icon, '#fbbf24', x, y), 100);
+          setTimeout(() => spawnFloat('NEW!', '#4ade80', x, y - 20), 200);
+          setTimeout(() => spawnFloat(u.name, '#60a5fa', x, y - 40), 300);
+        } else {
+          // アップグレード時の演出
+          spawnFloat('UPGRADE!', '#fbbf24', x, y);
+          setTimeout(() => spawnFloat(`Lv.${lvl + 1}`, '#fbbf24', x, y - 20), 150);
+        }
+      };
+
+      // actions
+      const onCollect = () => {
+        const gain = rates.clickData;
+        setState(p => ({...p, noise:(p.noise||0)+gain}));
+        const r = document.getElementById('action-area')?.getBoundingClientRect();
+        if(r) spawnFloat(`+${fmt(gain)} 💾`, '#4ade80', r.left+r.width*0.2, r.top);
+      };
+
+      const onAnalyze = () => {
+        if(state.noise < rates.clickResCost) return;
+        setState(p => ({...p, noise:(p.noise||0)-rates.clickResCost, research:(p.research||0)+rates.clickRes}));
+        const r = document.getElementById('action-area')?.getBoundingClientRect();
+        if(r) spawnFloat(`-💾${fmt(rates.clickResCost)} → +🔬${fmt(rates.clickRes)}`, '#60a5fa', r.left+r.width*0.55, r.top);
+      };
+
+      const toggleAuto = () => { if(state.research < 2) return; setIsAuto(v => !v); };
+
+      const onReverse = () => {
+        if(!state.discoveredFactorIds.includes('alphaomega')) return;
+        setModal({
+          title: '🌍 新規地域への参入 🌍',
+          body: `地域 ${state.region + 1} への参入を開始しますか？
+
+⚠️ 現在のAUM、設備、データ、リサーチポイントは
+すべて失われます。
+
+✨ しかし、経験値として蓄積され、
+次の地域ではより早く成長できます！`,
+          buttonText: '🚀 参入開始',
+          icon: '🌍',
+          onConfirm: () => {
+            const nextRegion = state.region + 1;
+            setState(p => ({
+              ...p,
+              region: nextRegion,
+              noise: 0,
+              research: 0,
+              aum: 1000,
+              levels: {},
+              unlockedTabs: ['data'],
+              discoveredFactorIds: [],
+              fundraiseCount: 0,
+            }));
+            setActiveTab('data');
+            setModal(null);
+            // リバース演出
+            setTimeout(() => spawnFloat('🌍', '#ffffff', window.innerWidth/2, window.innerHeight/2), 100);
+            setTimeout(() => spawnFloat('REVERSE!', '#ffffff', window.innerWidth/2, window.innerHeight/2 + 30), 200);
+            setTimeout(() => spawnFloat(`地域${nextRegion + 1}`, '#ffffff', window.innerWidth/2, window.innerHeight/2 + 60), 300);
+          }
+        });
+      };
+
+      // main loop (100ms)
+      useEffect(() => {
+        if(state.phase !== 'running') return;
+
+        const spawnOpp = setInterval(() => {
+          const gs = stateRef.current;
+          const lv = gs.levels;
+          const strats = UPGRADES.filter(u => u.category==='strategy' && (lv[u.id]>0));
+          if(strats.length===0) return;
+
+          const spectrumEl = document.getElementById('spectrum-area');
+          const w = spectrumEl ? spectrumEl.clientWidth : 360;
+
+          const strat = strats[(Math.random()*strats.length)|0];
+          const lvl = lv[strat.id] || 0;
+          const freq = (strat.frequency||0.05) * 4 * Math.pow(1.1, lvl);
+
+          if(Math.random() < freq){
+            const f = FACTORS.find(x => x.id===strat.reqFactor) || {color:'#fff'};
+            const val = calcValue(strat.baseValue || 1, lvl);
+            setOpps(p => (p.length>18 ? p : [...p, {id:Date.now()+Math.random(), x:w+40, color:f.color, val, status:'moving', scale:1}]));
+          }
+        }, 300);
+
+        const tick = setInterval(() => {
+          if(modal) return;
+
+          // always define now (fix)
+          const now = Date.now();
+          const dt = clampDt((now - (lastLoopRef.current || now)) / 1000);
+          lastLoopRef.current = now;
+
+          const gs = stateRef.current;
+
+          // move & (auto) collect opportunities
+          const spectrumEl = document.getElementById('spectrum-area');
+          const w = spectrumEl ? spectrumEl.clientWidth : 360;
+          const centerX = w/2;
+
+          setOpps(prev => {
+            let collected = 0;
+            let consumedR = 0;
+            let launched = 0;
+            let curR = gs.research;
+            const spawned = [];
+            const next = [];
+
+            for(const op of prev){
+              if(op.status==='exploding'){
+                if(op.scale < 2.4) next.push({...op, scale: op.scale + 0.22});
+                else {
+                  if(spectrumEl){
+                    const r = spectrumEl.getBoundingClientRect();
+                    spawned.push({x:r.left+op.x, y:r.top+r.height/2, val:op.val});
+                  }
+                }
+                continue;
+              }
+
+              const nextX = op.x - (120*dt);
+              if(autoRef.current){
+                const near = (op.x >= centerX-8 && nextX <= centerX+8);
+                if(near){
+                  const cost = 2;
+                  if(curR >= cost){
+                    collected += op.val;
+                    curR -= cost;
+                    consumedR += cost;
+                    launched++;
+                    next.push({...op, x:centerX, status:'exploding', scale:1.2});
+                    continue;
+                  }
+                }
+              }
+
+              if(nextX > -60) next.push({...op, x:nextX});
+            }
+
+            for(const e of spawned){
+              spawnFly(e.x, e.y);
+              spawnFloat(`+💰${fmt(e.val)}`, '#fbbf24', e.x, e.y);
+            }
+
+            if(collected>0){
+              setState(p => ({
+                ...p,
+                aum:(p.aum||0)+collected,
+                research: Math.max(0, (p.research||0) - consumedR),
+                fundraiseCount:(p.fundraiseCount||0)+launched,
+              }));
+            }
+
+            return next;
+          });
+
+          // passive updates
+          setState(prev => {
+            const r = calcRates(prev);
+            let next = {...prev};
+
+            // AUM passive
+            next.aum = (prev.aum||0) * (1 + r.passive * dt);
+            if(!Number.isFinite(next.aum)) next.aum = Number.MAX_VALUE;
+
+            // DATA
+            next.noise = (prev.noise||0) + r.dataProd * dt;
+
+            // research production (consume DATA)
+            let resGain = 0;
+            for(const u of UPGRADES){
+              if(u.category!=='research') continue;
+              const lv = prev.levels[u.id]||0;
+              if(lv<=0) continue;
+              const cons = (u.inputNoise||0) * lv * dt;
+              if(next.noise > cons){
+                next.noise -= cons;
+                resGain += (u.outputResearch||0) * lv * dt;
+              }
+            }
+            next.research = (prev.research||0) + resGain;
+
+            // factor discovery
+            const nf = FACTORS.find(f => !prev.discoveredFactorIds.includes(f.id));
+            if(nf && next.research >= nf.threshold){
+              next.discoveredFactorIds = [...prev.discoveredFactorIds, nf.id];
+            }
+
+            // keep finite
+            if(!Number.isFinite(next.noise)) next.noise = 0;
+            if(!Number.isFinite(next.research)) next.research = 0;
+            return next;
+          });
+
+        }, 100);
+
+        return () => { clearInterval(tick); clearInterval(spawnOpp); };
+      }, [state.phase, modal, spawnFly, spawnFloat]);
+
+      // tab labels
+      const tabs = useMemo(() => Array.from(new Set(state.unlockedTabs)), [state.unlockedTabs]);
+
+      const tabLabel = (t) => t==='data' ? '💾 DATA' : t==='research' ? '🔬 R&D' : '📈 STRAT';
+
+      const isStalled = rates.dataCons>0 && state.noise < 1 && rates.netData < 0;
+      const progress = useMemo(() => nextFactor ? Math.min(100, (state.research/nextFactor.threshold)*100) : 100, [state.research, nextFactor]);
+
+      return (
+        <ErrorBoundary>
+          <div className="h-screen w-full flex flex-col relative overflow-hidden">
+
+            {/* HEADER */}
+            <div className="z-30 bg-[#0f172a]/95 backdrop-blur border-b border-gray-800 p-2 shadow-lg shrink-0">
+              {state.region > 0 && (
+                <div className="text-center mb-1">
+                  <div className="inline-block px-3 py-1 bg-purple-900/40 border border-purple-500/50 rounded-full">
+                    <span className="text-[11px] font-mono font-bold text-purple-300">🌍 地域 {state.region + 1}</span>
+                  </div>
+                </div>
+              )}
+              <div className="flex justify-between items-end">
+                <div className="flex gap-3">
+                  <ResourceItem
+                    label="💾 DATA"
+                    value={fmt(state.noise)}
+                    subValue={`(${rates.netData>=0?'+':''}${fmt(rates.netData)}/s)`}
+                    subColor={rates.netData>=0?'text-green-500':'text-red-500'}
+                  />
+                  {state.unlockedTabs.includes('research') && (
+                    <ResourceItem
+                      label="🔬 RESEARCH"
+                      value={fmt(state.research)}
+                      subValue={isStalled ? `DATA不足 (-${fmt(Math.abs(rates.netData))}/s)` : `(+${fmt(rates.resProd)}/s)  DATA→RESEARCH`}
+                      subColor={isStalled ? 'text-red-400 font-bold' : 'text-blue-300'}
+                    />
+                  )}
+                </div>
+                <div className="text-right">
+                  <div className="flex flex-col items-end">
+                    <div id="aum-anchor" className="text-[10px] text-gray-500 font-mono tracking-widest">💰 AUM</div>
+                    <div className="text-2xl font-mono text-white font-bold leading-none">
+                      <span className="text-gray-500 text-lg mr-1">$</span>{fmt(state.aum)}
+                    </div>
+                    <div className="text-[10px] font-mono text-green-400">(+{(rates.passive*100).toFixed(2)}%/s)</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* ticker */}
+              <div className="mt-2 w-full bg-black/60 border border-gray-800 h-6 flex items-center overflow-hidden relative rounded">
+                <div className="whitespace-nowrap text-xs font-mono text-blue-400 animate-[ticker_18s_linear_infinite] px-4">{ticker}</div>
+              </div>
+
+              {/* factor progress */}
+              {nextFactor ? (
+                <div className="w-full flex items-center gap-2 mt-2">
+                  <div className="text-[10px] text-gray-400 font-mono whitespace-nowrap">次: {nextFactor.name}</div>
+                  <div className={`flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden border border-gray-700 ${isStalled?'bg-red-900/20':''}`}>
+                    <div className="bg-gradient-to-r from-blue-600 to-purple-500 h-full" style={{width:`${progress}%`}}></div>
+                  </div>
+                  <div className="text-[10px] text-gray-500 font-mono">{fmt(nextFactor.threshold)} ポイント</div>
+                </div>
+              ) : state.discoveredFactorIds.length >= FACTORS.length ? (
+                <div className="w-full flex items-center justify-center gap-2 mt-2">
+                  <div className="text-[10px] text-gray-400 font-mono">✨ すべてのファクターを発見しました！ ✨</div>
+                </div>
+              ) : null}
+            </div>
+
+            {/* SPECTRUM */}
+            <div className="shrink-0 border-b border-gray-800 bg-black">
+              <div id="spectrum-area" className="relative w-full" style={{height:'min(15vh, 120px)'}}>
+                {/* factor chips */}
+                <div className="absolute top-2 left-2 right-2 z-20 flex flex-wrap gap-1 pointer-events-none max-h-[58px] overflow-hidden">
+                  {unlockedFactors.map(f => (
+                    <div key={f.id} className="bg-black/80 border border-white/20 rounded px-1.5 py-0.5 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full" style={{backgroundColor:f.color}}></span>
+                      <span className="text-[9px] font-bold text-white leading-none">{f.name}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <WaveCanvas unlockedFactors={unlockedFactors} />
+                <OpportunityCanvas opportunities={opps} />
+              </div>
+
+              {/* ACTION ROW (BOTTOM of spectrum block) */}
+              <div id="action-area" className="w-full bg-[#0b0f19] border-t border-gray-800 flex items-stretch justify-between gap-2 px-2 py-2">
+                <ActionButton
+                  icon="⛏️"
+                  label="収集"
+                  sub={`+${fmt(rates.clickData)} 💾`}
+                  onClick={onCollect}
+                  highlight={guidance?.highlight==='action-collect'}
+                />
+                {state.unlockedTabs.includes('research') && (
+                  <ActionButton
+                    icon="🔬"
+                    label="分析"
+                    sub={`-${fmt(rates.clickResCost)} 💾 → +${fmt(rates.clickRes)} 🔬`}
+                    onClick={onAnalyze}
+                    disabled={state.noise < rates.clickResCost}
+                    highlight={guidance?.highlight==='action-analyze'}
+                    tone="blue"
+                  />
+                )}
+                {state.unlockedTabs.includes('strategy') && (
+                  <ActionButton
+                    icon={isAuto ? '🚀' : '💤'}
+                    label={isAuto ? '自動ON' : '自動OFF'}
+                    sub={isAuto ? '自動でファンドローンチ中' : '機会を手動でタップ'}
+                    onClick={toggleAuto}
+                    disabled={state.research < 2}
+                    active={isAuto}
+                    highlight={guidance?.highlight==='action-auto'}
+                  />
+                )}
+                {state.discoveredFactorIds.includes('alphaomega') && (
+                  <ActionButton
+                    icon="🌍"
+                    label="リバース"
+                    sub={`地域${state.region + 1}→${state.region + 2}`}
+                    onClick={onReverse}
+                    tone="blue"
+                    highlight={guidance?.highlight==='action-reverse'}
+                  />
+                )}
+              </div>
+
+              {/* TABS (no overlap, no syntax bug) */}
+              <div className="flex text-[11px] font-bold border-t border-gray-800 font-mono bg-gray-900">
+                {tabs.map(t => {
+                  const active = activeTab===t;
+                  const hl = guidance?.highlight===`tab-${t}`;
+                  return (
+                    <button
+                      key={t}
+                      onClick={() => setActiveTab(t)}
+                      className={`relative flex-1 py-3 transition-colors uppercase ${active ? 'text-white bg-blue-900/30 border-t-2 border-blue-500' : 'text-slate-400 border-t-2 border-transparent'} ${hl ? 'hl' : ''}`}
+                    >
+                      {tabLabel(t)}
+                      {hl && <div className="arrow">👇</div>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* LIST */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-[#0f172a] pb-20">
+              {UPGRADES.filter(u => u.category===activeTab).map(u => {
+                const lvl = state.levels[u.id]||0;
+
+                // lock strategies by factor
+                if(u.category==='strategy' && !state.discoveredFactorIds.includes(u.reqFactor)) return null;
+
+                const costA = calcCost(u.baseCostAum || 0, u.costFactor, lvl);
+                const costR = calcCost(u.baseCostResearch || 0, u.costFactor, lvl);
+                const can = state.aum>=costA && state.research>=costR;
+
+                const hl = guidance?.highlight===`card-${u.id}`;
+
+                const footerLeft = u.category==='strategy'
+                  ? `Val $${fmt(calcValue(u.baseValue || 1, lvl))}`
+                  : u.category==='research'
+                    ? `DATA→RESEARCH  +${fmt((u.outputResearch||0))}🔬/s  (cons ${fmt((u.inputNoise||0))}💾/s)`
+                    : `+${fmt((u.effectVal||0))} 💾/s`;
+
+                return (
+                  <div
+                    key={u.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => { if(can) buy(u, e); }}
+                    onKeyDown={(e)=>{ if((e.key==='Enter'||e.key===' ') && can) buy(u, e); }}
+                    className={`flex flex-col rounded-xl border transition-all active:scale-[0.995] ${can ? 'bg-gray-800 border-blue-500/30 cursor-pointer' : 'bg-gray-900/50 border-gray-800 opacity-75 cursor-not-allowed'} ${hl ? 'hl' : ''}`}
+                  >
+                    <div className="p-2 flex justify-between items-center">
+                      <div className="flex gap-3 items-center">
+                        <div className="text-2xl w-8 text-center">{u.icon}</div>
+                        <div>
+                          <div className="font-bold text-sm text-gray-200">{u.name} <span className="text-[10px] text-gray-500 ml-1">Lv.{lvl}</span></div>
+                          <div className="text-[10px] text-gray-400 leading-tight">{u.desc}</div>
+                        </div>
+                      </div>
+                      <div className={`text-[11px] font-mono font-black px-2 py-1 rounded-full border ${can ? 'text-blue-200 border-blue-500/30 bg-blue-900/20' : 'text-gray-500 border-gray-700 bg-gray-900/30'}`}>{can ? 'タップ' : '不可'}</div>
+                    </div>
+                    <div className="px-2 py-2 bg-black/20 border-t border-white/5 flex justify-between items-center text-[10px] font-mono">
+                      <div className="text-gray-300">{footerLeft}</div>
+                      <div className="flex gap-2">
+                        {costA>0 && <span className={state.aum>=costA?'text-gray-300':'text-red-400'}>💰{fmt(costA)}</span>}
+                        {costR>0 && <span className={state.research>=costR?'text-blue-300':'text-red-400'}>🔬{fmt(costR)}</span>}
+                      </div>
+                    </div>
+                    {hl && <div className="arrow">👇</div>}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* FX */}
+            {flys.map(p => <Flying key={p.id} {...p} />)}
+            {floats.map(f => (
+              <div key={f.id} className="float" style={{left:f.x, top:f.y, color:f.color, fontSize:f.fontSize}}>{f.text}</div>
+            ))}
+
+            {/* Guidance bar */}
+            {guidance && (
+              <div className="fixed bottom-0 left-0 right-0 bg-blue-900/90 border-t border-blue-500/30 p-2 z-40 flex items-center justify-center gap-2 backdrop-blur">
+                <span className="text-yellow-400 animate-pulse text-xs">💡</span>
+                <span className="text-xs font-mono text-white tracking-wide truncate max-w-[92%]">{guidance.text}</span>
+              </div>
+            )}
+
+            {modal && <Modal {...modal} onConfirm={() => { modal.onConfirm?.(); setModal(null); }} />}
+          </div>
+        </ErrorBoundary>
+      );
+    }
+
+    // Initialize React with fallback for compatibility
+    const rootElement = document.getElementById('root');
+    if (rootElement) {
+      try {
+        if (ReactDOM.createRoot) {
+          const root = ReactDOM.createRoot(rootElement);
+          root.render(<App />);
+        } else {
+          // Fallback for React 17
+          ReactDOM.render(<App />, rootElement);
+        }
+      } catch (error) {
+        console.error('React initialization error:', error);
+        rootElement.innerHTML = '<div style="padding: 20px; color: red;">Initialization Error: ' + error.message + '</div>';
+      }
+    }
+  </script>
+</body>
+</html>

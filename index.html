@@ -90,10 +90,20 @@
     // Game calculation helpers
     const calcCost = (baseCost, costFactor, level) => baseCost * Math.pow(costFactor || 1, level);
     const calcValue = (baseValue, level, multiplier = 1.1) => baseValue * Math.pow(multiplier, level);
+    
+    // チュートリアル後の指数関数的成長計算（リバース回数のみに応じて）
+    const calcExponentialGrowth = (base, discoveredFactors, region, isTutorialComplete) => {
+      if(!isTutorialComplete && region === 0) return 1.0; // チュートリアル中は成長なし
+      // ベースで100倍、リバース回数に応じた追加成長（1.5^リバース回数）
+      // ファクター発見数は使わない（ファンドのコストがファクター発見で上がらないようにする）
+      const baseMultiplier = 100;
+      const regionBonus = region > 0 ? Math.pow(1.5, region) : 1.0;
+      return baseMultiplier * regionBonus;
+    };
 
     // ---- Game content ----
     const FACTORS = [
-      { id:'beta', name:'Market Beta', threshold: 25, color:'#3b82f6', waveFreq:0.02, waveAmp:30 },
+      { id:'beta', name:'Market Beta', threshold: 20, color:'#3b82f6', waveFreq:0.02, waveAmp:30 },
       { id:'size', name:'Size', threshold: 80, color:'#4ade80', waveFreq:0.05, waveAmp:20 },
       { id:'value', name:'Value', threshold: 200, color:'#fbbf24', waveFreq:0.08, waveAmp:15 },
       { id:'momentum', name:'Momentum', threshold: 500, color:'#ef4444', waveFreq:0.10, waveAmp:18 },
@@ -108,7 +118,7 @@
 
     const UPGRADES = [
       // data (produce DATA/s)
-      { id:'intern', category:'data', name:'インターン', desc:'手動入力を支援。', baseCostAum: 25, costFactor:1.45, effectVal:1, icon:'📝' },
+      { id:'intern', category:'data', name:'インターン', desc:'データ収集を支援。', baseCostAum: 25, costFactor:1.45, effectVal:1, icon:'📝' },
       { id:'scraper', category:'data', name:'Webスクレイパー', desc:'ネットから自動収集。', baseCostAum: 300, costFactor:1.55, effectVal:10, icon:'🕷️' },
       { id:'data_warehouse', category:'data', name:'データウェアハウス', desc:'大規模データストレージ。', baseCostAum: 3000, costFactor:1.6, effectVal:100, icon:'🏢' },
       { id:'satellite', category:'data', name:'衛星フィード', desc:'衛星データをリアルタイム取得。', baseCostAum: 30000, costFactor:1.65, effectVal:1000, icon:'🛰️' },
@@ -123,7 +133,7 @@
       { id:'dimensional_rift', category:'research', name:'次元リフト', desc:'次元を超えた研究。', baseCostAum: 2500000, costFactor:1.8, inputNoise:20000, outputResearch:25000, icon:'🌀' },
 
       // strategy (creates opportunities) - 各戦略は発見したファクターに関連する
-      { id:'index_fund', category:'strategy', name:'インデックスファンド', reqFactor:'beta', desc:'市場連動で機会が出現。', baseCostAum: 200, baseCostResearch: 3, costFactor:1.6, passiveYield:0.004, baseValue: 5000, frequency:0.06, icon:'📈' },
+      { id:'index_fund', category:'strategy', name:'インデックスファンド', reqFactor:'beta', desc:'市場の動きに連動。', baseCostAum: 200, baseCostResearch: 3, costFactor:1.6, passiveYield:0.004, baseValue: 5000, frequency:0.06, icon:'📈' },
       { id:'small_cap_fund', category:'strategy', name:'スモールキャップファンド', reqFactor:'size', desc:'小型株効果を狙う。', baseCostAum: 1200, baseCostResearch: 25, costFactor:1.7, passiveYield:0.007, baseValue: 18000, frequency:0.07, icon:'🐜' },
       { id:'value_fund', category:'strategy', name:'バリューファンド', reqFactor:'value', desc:'割安株を拾う。', baseCostAum: 8000, baseCostResearch: 120, costFactor:1.75, passiveYield:0.010, baseValue: 65000, frequency:0.08, icon:'💎' },
       { id:'momentum_fund', category:'strategy', name:'モメンタムファンド', reqFactor:'momentum', desc:'勢いのある銘柄を追う。', baseCostAum: 50000, baseCostResearch: 600, costFactor:1.8, passiveYield:0.015, baseValue: 250000, frequency:0.09, icon:'🚀' },
@@ -136,9 +146,9 @@
       { id:'alphaomega_fund', category:'strategy', name:'AlphaOmega (ESG) ファンド', reqFactor:'alphaomega', desc:'ESGを統合した究極の戦略。', baseCostAum: 500000000000, baseCostResearch: 6000000000, costFactor:2.15, passiveYield:0.100, baseValue: 500000000000, frequency:0.25, icon:'🌍' },
       
       // 自動アップグレード（リバース回数に応じて購入可能）
-      { id:'auto_upgrade_data', category:'data', name:'自動データ収集', desc:'すべてのデータ収集を自動化。', baseCostAum: 1000000000, costFactor:1.5, effectVal:0, autoUpgrade:true, reqRegion:2, icon:'🤖' },
-      { id:'auto_upgrade_research', category:'research', name:'自動リサーチ', desc:'すべてのリサーチを自動化。', baseCostAum: 5000000000, costFactor:1.5, inputNoise:0, outputResearch:0, autoUpgrade:true, reqRegion:3, icon:'🧠' },
-      { id:'auto_upgrade_strategy', category:'strategy', name:'自動戦略最適化', desc:'すべての戦略を自動で最適化。', baseCostAum: 50000000000, costFactor:1.5, passiveYield:0, baseValue:0, frequency:0, autoUpgrade:true, reqRegion:4, icon:'⚡' },
+      { id:'auto_upgrade_data', category:'data', name:'データ収集最適化', desc:'データ収集購入が自動化されます。', baseCostAum: 1000000000, costFactor:1.5, effectVal:0, autoUpgrade:true, reqRegion:2, icon:'🤖' },
+      { id:'auto_upgrade_research', category:'research', name:'リサーチ最適化', desc:'リサーチの購入が自動化されます。', baseCostAum: 5000000000, costFactor:1.5, inputNoise:0, outputResearch:0, autoUpgrade:true, reqRegion:3, icon:'🧠' },
+      { id:'auto_upgrade_strategy', category:'strategy', name:'戦略最適化', desc:'戦略の購入が自動化されます。', baseCostAum: 50000000000, costFactor:1.5, passiveYield:0, baseValue:0, frequency:0, autoUpgrade:true, reqRegion:4, icon:'⚡' },
     ];
 
     const NEWS = [
@@ -150,6 +160,11 @@
 
     const calcRates = (s) => {
       const lvl = (id) => s.levels[id] || 0;
+      
+      // チュートリアル完了判定（region === 0 かつ index_fund が購入されている）
+      const isTutorialComplete = s.region === 0 && lvl('index_fund') > 0;
+      // チュートリアル以外の厳しい成長率（50%削減）
+      const growthPenalty = (isTutorialComplete || s.region > 0) ? 0.5 : 1.0;
       
       // 自動アップグレードの効果
       const hasAutoData = lvl('auto_upgrade_data') > 0;
@@ -168,6 +183,7 @@
       } else {
         for(const u of UPGRADES){ if(u.category==='data' && !u.autoUpgrade) dataProd += (u.effectVal||0) * lvl(u.id); }
       }
+      dataProd *= growthPenalty; // チュートリアル後の成長率削減
 
       // RESEARCH production (自動アップグレード時はすべてのリサーチを自動化)
       let dataCons = 0, resProd = 0;
@@ -188,6 +204,7 @@
           }
         }
       }
+      resProd *= growthPenalty; // チュートリアル後の成長率削減
 
       // passive yield from strategies (自動戦略最適化時はすべての戦略を自動で最適化)
       let passive = 0.001;
@@ -201,6 +218,7 @@
       } else {
         for(const u of UPGRADES){ if(u.category==='strategy' && !u.autoUpgrade) passive += (u.passiveYield||0) * lvl(u.id); }
       }
+      passive *= growthPenalty; // チュートリアル後の成長率削減
 
       const netData = dataProd - dataCons;
 
@@ -399,11 +417,11 @@
     function App(){
       const [state, setState] = useState({
         phase: 'start',
-        noise: 0,       // DATA
+        noise: 30,       // DATA（初期値: 手動収集なしで開始）
         research: 0,    // RESEARCH
         aum: 1000,      // $AUM
         levels: {},
-        unlockedTabs: ['data'],
+        unlockedTabs: ['data', 'research'], // researchタブを初期からアンロック
         discoveredFactorIds: [],
         fundraiseCount: 0,
         region: 0,      // 現在の地域（0=初期地域）
@@ -417,6 +435,11 @@
       const [flys, setFlys] = useState([]);
       const [guidanceSkipped, setGuidanceSkipped] = useState(new Set());
       const [marketEvent, setMarketEvent] = useState(null); // {type: 'crash'|'fever', duration: number, startTime: number}
+      const [currentTime, setCurrentTime] = useState(Date.now()); // カウントダウン更新用
+      const [lastEventEndTime, setLastEventEndTime] = useState(null); // 最後のイベント終了時刻
+      const [momentumFactorDiscoveredTime, setMomentumFactorDiscoveredTime] = useState(null); // Momentumファクター発見時刻
+      const [marketEventGuidanceActive, setMarketEventGuidanceActive] = useState(false); // マーケットイベントガイダンス表示中か
+      const [marketEventGuidanceDone, setMarketEventGuidanceDone] = useState(false); // マーケットイベントガイダンスを完了したか
       const lastAutoBuyRef = useRef({ data: 0, research: 0, strategy: 0 }); // 最後に自動購入した時刻
 
       const stateRef = useRef(state);
@@ -425,13 +448,24 @@
 
       const rates = useMemo(() => calcRates(state), [state]);
       
-      // リバース後、ファクターポイントの閾値を減らす（地域ごとに10%減）
+      // リバース後、研究ポイントの閾値を調整（チュートリアル後の指数関数的成長とリバース後のバランス）
       const getFactorThreshold = useCallback((baseThreshold) => {
-        if(state.region === 0) return baseThreshold;
-        // 地域が増えるごとに10%減（最大50%減）
-        const reduction = Math.min(0.5, state.region * 0.1);
-        return Math.max(baseThreshold * 0.5, baseThreshold * (1 - reduction));
-      }, [state.region]);
+        const isTutorialComplete = state.region === 0 && (state.levels.index_fund || 0) > 0;
+        
+        if(state.region === 0) {
+          // チュートリアル後は指数関数的成長を適用
+          if(isTutorialComplete) {
+            const growth = calcExponentialGrowth(1, state.discoveredFactorIds.length, 0, true);
+            return baseThreshold * growth;
+          }
+          return baseThreshold;
+        }
+        
+        // リバース後：少しハードルを上げる（1.2倍）、でもリバース効果は維持
+        // リバース回数に応じて少し増やす（リバース1回目: 1.2倍、2回目: 1.3倍...）
+        const baseIncrease = 1.0 + (state.region * 0.1); // リバース回数ごとに10%増
+        return baseThreshold * baseIncrease;
+      }, [state.region, state.discoveredFactorIds, state.levels]);
       
       const nextFactor = useMemo(() => {
         const factor = FACTORS.find(f => !state.discoveredFactorIds.includes(f.id));
@@ -456,7 +490,8 @@
         const r = el.getBoundingClientRect();
         const targetX = r.left + r.width/2;
         const targetY = r.top + r.height/2;
-        const id = Date.now()+Math.random();
+        // より一意なIDを生成（キーの重複を防ぐ）
+        const id = `${Date.now()}-${Math.random()}-${Math.random()}`;
         setFlys(p => [...p, {id, startX, startY, targetX, targetY}]);
         setTimeout(() => setFlys(p => p.filter(i => i.id!==id)), 800);
       }, []);
@@ -479,21 +514,29 @@
         const t = setInterval(() => setTicker(NEWS[(Math.random()*NEWS.length)|0]), 8000);
         return () => clearInterval(t);
       }, []);
+      
+      // currentTime更新（Momentumファクター発見後は常に更新：カウントダウンをリアルタイム表示）
+      useEffect(() => {
+        const hasMomentum = state.discoveredFactorIds.includes('momentum');
+        if(!hasMomentum) return;
+        
+        // 即座に更新を開始
+        const tick = () => setCurrentTime(Date.now());
+        tick(); 
+        
+        const interval = setInterval(tick, 100); 
+        return () => clearInterval(interval);
+      }, [state.discoveredFactorIds]);
 
       // unlock tabs
-      const noise = state.noise || 0;
       const discoveredFactorIdsStr = state.discoveredFactorIds.join(',');
       const unlockedTabsStr = state.unlockedTabs.join(',');
-      const hasIntern = (state.levels.intern || 0) > 0;
       useEffect(() => {
-        // インターン購入後、DATAが10以上になったらresearchタブをアンロック
-        if(hasIntern && noise >= 10 && !state.unlockedTabs.includes('research')){
-          setState(p => p.unlockedTabs.includes('research') ? p : ({...p, unlockedTabs:[...p.unlockedTabs,'research']}));
-        }
+        // strategyタブはベータファクター発見時にアンロック
         if(state.discoveredFactorIds.includes('beta') && !state.unlockedTabs.includes('strategy')){
           setState(p => p.unlockedTabs.includes('strategy') ? p : ({...p, unlockedTabs:[...p.unlockedTabs,'strategy']}));
         }
-      }, [noise, discoveredFactorIdsStr, unlockedTabsStr, hasIntern]);
+      }, [discoveredFactorIdsStr, unlockedTabsStr]);
 
       // factor discovery celebration
       const prevFactorIdsRef = useRef([]);
@@ -504,14 +547,20 @@
             const newFactor = FACTORS.find(f => f.id === newFactorId);
             if(newFactor){
               const isAlphaOmega = newFactorId === 'alphaomega';
+              // 対応する戦略を検索
+              const correspondingStrategy = UPGRADES.find(u => u.reqFactor === newFactorId && u.category === 'strategy');
+              const strategyName = correspondingStrategy ? correspondingStrategy.name : '';
+              
               setModal({
                 title: '✨ ファクター発見！ ✨',
                 body: isAlphaOmega ? `${newFactor.name}を発見しました！
 
 すべての投資戦略が解放されました。
-新しい惑星への投資が可能になりました！` : `${newFactor.name}を発見しました！
+新しい惑星への投資が可能になりました！` : strategyName ? `${newFactor.name}を発見しました！
 
-新しい投資戦略が解放されます。`,
+「${strategyName}」が解放されました！` : `${newFactor.name}を発見しました！
+
+新しい投資戦略が解放されました。`,
                 buttonText: '🚀 続ける',
                 icon: '🌟',
                 onConfirm: () => setModal(null)
@@ -526,6 +575,14 @@
         prevFactorIdsRef.current = [...state.discoveredFactorIds];
       }, [state.discoveredFactorIds, state.phase, spawnFloat]);
 
+      // Momentumファクター発見時刻を記録（初回のみ）
+      // currentTimeが更新されるたびに再評価されないよう、依存配列を絞る
+      useEffect(() => {
+        if(state.discoveredFactorIds.includes('momentum') && !momentumFactorDiscoveredTime){
+          setMomentumFactorDiscoveredTime(Date.now());
+        }
+      }, [state.discoveredFactorIds]); // momentumFactorDiscoveredTimeを依存から外して無限ループ防止（セッター内判定で十分）
+
       // guidance
       const guidance = useMemo(() => {
         if(state.region > 0) return null; // リバース後はチュートリアルを無効化
@@ -535,79 +592,84 @@
         const hasAnalyst = (state.levels.analyst || 0) > 0;
         const hasBeta = state.discoveredFactorIds.includes('beta');
         const hasIndexFund = (state.levels.index_fund || 0) > 0;
+        const hasMomentumFactor = state.discoveredFactorIds.includes('momentum');
         const researchUnlocked = state.unlockedTabs.includes('research');
         const strategyUnlocked = state.unlockedTabs.includes('strategy');
         
-        // ステップ1: 手動収集を促す（インターン未購入、データが少ない）
-        // 1回のクリックで10 DATA、3回で30 DATA必要
-        if(!hasIntern && noise < 30) {
-          return { text:'まずは、マーケットのノイズデータを集めましょう（3回押してください）', highlight:'action-collect' };
+        // 初回マーケットイベント発生時の説明（Momentumファクター発見後）
+        // 優先度を高く設定（他のチュートリアルステップより先に表示）
+        // ステップ1: マーケットイベントの説明（「次へ」を押すまで表示し続ける）
+        if(hasMomentumFactor && marketEventGuidanceActive && !guidanceSkipped.has('market-event-intro')){
+          return { 
+            text:'📊 運用資産が急に増減するマーケットイベントが発生するようになりました。', 
+            highlight:'event-countdown', 
+            skipable:true, 
+            skipKey:'market-event-intro' 
+          };
+        }
+        // ステップ2: カウントダウンの説明（「次へ」を押すまで表示し続ける）
+        if(hasMomentumFactor && marketEventGuidanceActive && guidanceSkipped.has('market-event-intro') && !guidanceSkipped.has('market-event-countdown')){
+          return { 
+            text:'カウントダウンを見てください。これが次回イベントまでの残り時間です。', 
+            highlight:'event-countdown', 
+            skipable:true, 
+            skipKey:'market-event-countdown' 
+          };
+        }
+        // ステップ3: 分散度の説明（「次へ」を押すまで表示し続ける）
+        if(hasMomentumFactor && marketEventGuidanceActive && guidanceSkipped.has('market-event-countdown') && !guidanceSkipped.has('market-event-diversification')){
+          return { 
+            text:'分散度を確認しましょう。戦略の数が多ければ分散度が高く、マーケットイベント時にお金が増えやすいです。', 
+            highlight:'diversification-info', 
+            skipable:true, 
+            skipKey:'market-event-diversification' 
+          };
         }
         
-        // ステップ1.5: 手動収集後のDATA説明（3回押した後、インターン未購入）
-        if(!hasIntern && noise >= 30 && noise < 35) {
-          if(guidanceSkipped.has('data-explanation')) return null;
-          return { text:'上の「💾 データ」を見てください。データがどれくらい集まったか確認できます', highlight:'header-data', skipable:true, skipKey:'data-explanation' };
+        // ステップ1: インターン購入を促す（初期状態）
+        if(!hasIntern) {
+          return { text:'データを収集しましょう。「購入×1」ボタンでインターンを採用', highlight:'buy-intern' };
         }
         
-        // ステップ2: インターン購入を促す（データが少し集まったが、インターン未購入）
-        if(!hasIntern && noise >= 35) {
-          return { text:'データ収集は自動化させましょう。「購入×1」ボタンでインターンを採用', highlight:'buy-intern' };
-        }
-        
-        // ステップ2.5: ヘッダーの説明（インターン購入直後）
-        if(hasIntern && !researchUnlocked && noise < 10) {
-          if(guidanceSkipped.has('auto-data-explanation')) return null;
+        // ステップ1.5: ヘッダーの説明（インターン購入直後、まだスキップしていない場合）
+        if(hasIntern && !hasAnalyst && !guidanceSkipped.has('auto-data-explanation')) {
           return { text:'上の「💾 データ」を見てください。自動でデータが増えています', highlight:'header-data', skipable:true, skipKey:'auto-data-explanation' };
         }
         
-        // ステップ3: researchタブがアンロックされていない場合
-        if(!researchUnlocked) {
-          if(noise < 10) {
-            return { text:'「収集」ボタンでデータを10集めてリサーチタブを解放', highlight:'action-collect' };
-          }
-          // DATAが10以上あるが、まだアンロックされていない場合（次のフレームでアンロックされる）
-          return { text:'リサーチタブが解放されました！', highlight:null };
-        }
-        
-        // ステップ3.5: R&Dタブに切り替えを促す（researchタブがアンロック済み、まだR&Dタブにいない）
-        if(researchUnlocked && activeTab !== 'research' && !hasAnalyst && state.research < 15) {
+        // ステップ2: リサーチタブに切り替えを促す（アナリスト未購入、researchタブにいない）
+        if(!hasAnalyst && researchUnlocked && activeTab !== 'research') {
           return { text:'リサーチタブを開きましょう。上の「🔬 リサーチ」タブをタップ', highlight:'tab-research' };
         }
         
-        // ステップ4: 分析ボタンを教える（アナリスト未購入、researchタブがアンロック済み、R&Dタブにいる）
-        if(!hasAnalyst && researchUnlocked && activeTab === 'research' && state.research < 15) {
-          return { text:'データが集まったので分析しましょう。「分析」ボタンでデータ→リサーチ変換（3回押してください）', highlight:'action-analyze' };
+        // ステップ3: アナリスト購入を促す（researchタブにいる）
+        if(!hasAnalyst && researchUnlocked && activeTab === 'research') {
+          return { text:'データを研究ポイントに変換しましょう。「購入×1」ボタンを押してアナリストを採用', highlight:'buy-analyst' };
         }
         
-        // ステップ4.5: RESEARCHの説明（分析ボタンを3回押した後）
-        if(!hasAnalyst && researchUnlocked && state.research >= 15 && state.research < 16 && !guidanceSkipped.has('research-explanation')) {
-          return { text:'上の「🔬 リサーチ」を見てください。分析ポイントがどれくらい集まったか確認できます', highlight:'header-research', skipable:true, skipKey:'research-explanation' };
+        // ステップ3.5: 研究ポイントの説明（アナリスト購入後、研究ポイントが少したまったら）
+        // スキップされるまで表示を維持（条件が変わっても表示し続ける）
+        if(hasAnalyst && researchUnlocked && state.research > 0 && state.research < 25 && !hasBeta && !guidanceSkipped.has('research-explanation')) {
+          return { text:'上の「🔬 リサーチ」を見てください。データが研究ポイントに変換されています。', highlight:'header-research', skipable:true, skipKey:'research-explanation' };
         }
         
-        // ステップ5: アナリスト購入を促す（分析ボタンを3回使った後、R&Dタブにいる）
-        if(!hasAnalyst && researchUnlocked && activeTab === 'research' && state.research >= 15) {
-          return { text:'分析の自動化をしましょう。「購入×1」ボタンを押してアナリストを採用', highlight:'buy-analyst' };
-        }
-        
-        // ステップ5.5: R&Dタブに切り替えを促す（アナリスト未購入、R&Dタブにいない）
-        if(!hasAnalyst && researchUnlocked && activeTab !== 'research' && state.research >= 15) {
-          return { text:'リサーチタブでアナリストを採用しましょう。上の「🔬 リサーチ」タブをタップ', highlight:'tab-research' };
-        }
-        
-        // ステップ5.6: ファクターゲージの説明（アナリスト購入後、RESEARCHが一定たまったら）
-        if(hasAnalyst && researchUnlocked && state.research >= 15 && state.research < 25 && !hasBeta) {
-          if(guidanceSkipped.has('factor-gauge-explanation')) return null;
-          return { text:'分析ポイントが一定たまれば市場の法則を発見できます。上のゲージを見てください', highlight:'factor-gauge', skipable:true, skipKey:'factor-gauge-explanation' };
+        // ステップ4: ファクターゲージの説明（アナリスト購入後、RESEARCHが一定たまったら）
+        // スキップされるまで表示を維持（研究ポイントが20を超えても表示し続ける）
+        if(hasAnalyst && researchUnlocked && state.research >= 10 && !hasBeta && !guidanceSkipped.has('factor-gauge-explanation') && guidanceSkipped.has('research-explanation')) {
+          return { text:'研究ポイントが一定貯まれば市場の法則「ファクター」を発見できます。上のゲージを見てください。', highlight:'factor-gauge', skipable:true, skipKey:'factor-gauge-explanation' };
         }
         
         // ステップ6: ファクター発見を促す（アナリスト購入後、まだBeta未発見）
-        if(!hasBeta && hasAnalyst && state.research < 25) {
-          return { text:'アナリストが自動でRESEARCHを生成しています。Betaを発見しよう', highlight:'factor-gauge' };
+        // 前のステップ（3.5と4）が表示されていない、またはスキップ済みの場合に表示
+        if(!hasBeta && hasAnalyst && researchUnlocked) {
+          const step3_5Visible = !guidanceSkipped.has('research-explanation') && state.research > 0;
+          const step4Visible = !guidanceSkipped.has('factor-gauge-explanation') && guidanceSkipped.has('research-explanation') && state.research >= 10;
+          if(!step3_5Visible && !step4Visible) {
+            return { text:'アナリストが自動でRESEARCHを生成しています。Betaを発見しよう', highlight:'factor-gauge' };
+          }
         }
         
-        // ステップ7: 運用戦略タブを促す（ファクター発見後、戦略タブがアンロックされていない）
-        if(!strategyUnlocked && hasBeta) {
+        // ステップ7: 運用戦略タブを促す（ファクター発見後、すぐに表示）
+        if(hasBeta && !strategyUnlocked) {
           return { text:'ファクターを発見しました！市場の仕組みを一つ解明したので、運用戦略タブを開きましょう', highlight:'tab-strategy' };
         }
         
@@ -618,17 +680,45 @@
         
         // ステップ8: インデックスファンド購入を促す（STRATタブにいる）
         if(!hasIndexFund && strategyUnlocked && activeTab === 'strategy') {
-          return { text:'運用戦略を開放しましょう。「購入×1」ボタンでインデックスファンドを購入。これによってファンドを立ち上げることが可能になりお金を集められます', highlight:'buy-index_fund' };
+          return { text:'発見したファクターを利用した投資戦略を開発しましょう。「開発×1」ボタンで開発。これによってインデックスファンドがたまにローンチされお金を集められます。', highlight:'buy-index_fund' };
         }
         
         // ステップ8.5: 運用資産の説明（インデックスファンド購入後）
-        if(hasIndexFund && state.aum < 1500) {
-          if(guidanceSkipped.has('aum-explanation')) return null;
-          return { text:'上の「💰 運用資産」を見てください。ファンドでお金が増えています', highlight:'header-aum', skipable:true, skipKey:'aum-explanation' };
+        // スキップされるまで表示を維持（数値が変わっても表示し続ける）
+        if(hasIndexFund && !guidanceSkipped.has('aum-explanation')) {
+          return { text:'上の「💰 運用資産」を見てください。ファンドの運用で少しずつお金が増えています。', highlight:'header-aum', skipable:true, skipKey:'aum-explanation' };
+        }
+        
+        // ステップ9: 運用資産が増えたことを確認（運用資産説明がスキップされた後）
+        // スキップされるまで表示を維持
+        if(hasIndexFund && state.aum >= 1500 && !guidanceSkipped.has('aum-growth-confirm') && guidanceSkipped.has('aum-explanation')) {
+          return { text:'さらにファンドローンチ（お金のバッグ）でお金をさらに獲得します。', highlight:'header-aum', skipable:true, skipKey:'aum-growth-confirm' };
+        }
+        
+        // ステップ10: 次のアップグレードを促す（運用資産が十分に増えた後）
+        if(hasIndexFund && state.aum >= 2000 && (state.levels.scraper || 0) === 0) {
+          if(activeTab !== 'data') {
+            return { text:'データ収集を強化しましょう。「💾 データ」タブに切り替えてWebスクレイパーを購入してみてください', highlight:'tab-data' };
+          }
+          return { text:'より多くのデータを集めるために、Webスクレイパーを購入してみましょう。「購入×1」ボタンで次のデータ収集カードを購入', highlight:'buy-scraper' };
+        }
+        
+        // ステップ10.5: MLクラスター購入を促す（スクレイパー購入後）
+        if(hasIndexFund && state.aum >= 2000 && (state.levels.scraper || 0) > 0 && (state.levels.ml_cluster || 0) === 0) {
+          if(activeTab !== 'research') {
+            return { text:'研究ポイント生成を強化しましょう。「🔬 リサーチ」タブに切り替えてMLクラスターを購入してみてください', highlight:'tab-research' };
+          }
+          return { text:'より多くの研究ポイントを生成するために、MLクラスターを購入してみましょう。「購入×1」ボタンで次のリサーチカードを購入', highlight:'buy-ml_cluster' };
+        }
+        
+        // ステップ11: チュートリアル完了の確認
+        if(hasIndexFund && state.aum >= 2000 && (state.levels.scraper || 0) > 0 && (state.levels.ml_cluster || 0) > 0) {
+          if(guidanceSkipped.has('tutorial-complete')) return null;
+          return { text:'🎉 基本的な仕組みを理解しました。', highlight:null, skipable:true, skipKey:'tutorial-complete' };
         }
         
         return null; // チュートリアル完了
-      }, [state, activeTab, guidanceSkipped]);
+      }, [state, activeTab, guidanceSkipped, marketEvent]);
 
       // keep tab aligned during tutorial (チュートリアル中のみ有効)
       const internLevel = state.levels.intern || 0;
@@ -665,10 +755,19 @@
         prevUnlockedTabsRef.current = [...state.unlockedTabs];
       }, [internLevel, analystLevel, indexFundLevel, unlockedTabsStr2, activeTab, state.unlockedTabs, state.region, guidance]);
 
-      // calculate max purchasable
+      // calculate max purchasable（指数関数的成長を考慮）
       const calcMaxBuy = (u) => {
+        // ファクターのロックチェック
+        const isLockedByFactor = u.category==='strategy' && !u.autoUpgrade && u.reqFactor && !state.discoveredFactorIds.includes(u.reqFactor);
+        if(isLockedByFactor) return 0;
+        
         // リバース回数のチェック
         if(u.reqRegion !== undefined && state.region < u.reqRegion) return 0;
+        
+        const isTutorialComplete = state.region === 0 && (state.levels.index_fund || 0) > 0;
+        const growthMultiplier = calcExponentialGrowth(1, state.discoveredFactorIds.length, state.region, isTutorialComplete);
+        // 戦略カテゴリの場合、指数関数的成長を適用（チュートリアル後、リバース後）
+        const costGrowth = (u.category === 'strategy' && (isTutorialComplete || state.region > 0)) ? growthMultiplier : 1.0;
         
         let count = 0;
         let totalCostA = 0;
@@ -676,8 +775,13 @@
         let currentLvl = state.levels[u.id] || 0;
         
         while(true){
-          const costA = calcCost(u.baseCostAum || 0, u.costFactor, currentLvl + count);
-          const costR = calcCost(u.baseCostResearch || 0, u.costFactor, currentLvl + count);
+          let costA = calcCost(u.baseCostAum || 0, u.costFactor, currentLvl + count);
+          let costR = calcCost(u.baseCostResearch || 0, u.costFactor, currentLvl + count);
+          // 指数関数的成長を適用
+          if(costGrowth > 1.0) {
+            costA *= costGrowth;
+            costR *= costGrowth;
+          }
           if(state.aum < totalCostA + costA || state.research < totalCostR + costR) break;
           totalCostA += costA;
           totalCostR += costR;
@@ -692,20 +796,35 @@
         const lvl = state.levels[u.id] || 0;
         if(amount <= 0) return;
         
+        // ファクターのロックチェック
+        const isLockedByFactor = u.category==='strategy' && !u.autoUpgrade && u.reqFactor && !state.discoveredFactorIds.includes(u.reqFactor);
+        if(isLockedByFactor) return;
+        
         // リバース回数のチェック
         if(u.reqRegion !== undefined && state.region < u.reqRegion) return;
+        
+        const isTutorialComplete = state.region === 0 && (state.levels.index_fund || 0) > 0;
+        const growthMultiplier = calcExponentialGrowth(1, state.discoveredFactorIds.length, state.region, isTutorialComplete);
+        // 戦略カテゴリの場合、指数関数的成長を適用（チュートリアル後、リバース後）
+        const costGrowth = (u.category === 'strategy' && (isTutorialComplete || state.region > 0)) ? growthMultiplier : 1.0;
         
         let totalCostA = 0;
         let totalCostR = 0;
         for(let i = 0; i < amount; i++){
-          totalCostA += calcCost(u.baseCostAum || 0, u.costFactor, lvl + i);
-          totalCostR += calcCost(u.baseCostResearch || 0, u.costFactor, lvl + i);
+          let costA = calcCost(u.baseCostAum || 0, u.costFactor, lvl + i);
+          let costR = calcCost(u.baseCostResearch || 0, u.costFactor, lvl + i);
+          // 指数関数的成長を適用
+          if(costGrowth > 1.0) {
+            costA *= costGrowth;
+            costR *= costGrowth;
+          }
+          totalCostA += costA;
+          totalCostR += costR;
         }
         
         if(state.aum < totalCostA || state.research < totalCostR) return;
         
         const isFirstPurchase = lvl === 0;
-        const isTutorialComplete = u.id === 'index_fund' && isFirstPurchase;
         const newLvl = lvl + amount;
         
         setState(p => ({
@@ -715,29 +834,7 @@
           levels: {...p.levels, [u.id]: newLvl}
         }));
         
-        // チュートリアル終了時のモーダル（リバース後は表示しない）
-        if(isTutorialComplete && state.region === 0){
-          const x = window.innerWidth/2;
-          const y = window.innerHeight/2;
-          setModal({
-            title: '🎓 チュートリアル完了！ 🎓',
-            body: `おめでとうございます！
-
-チュートリアルが完了しました。
-
-このように市場のデータを集め、
-市場の仕組みを解明していき、
-どんどんお金を集め、
-世界一の運用会社を作りましょう！
-
-🚀 ゲームを楽しんでください！`,
-            buttonText: '🚀 ゲーム開始',
-            icon: '🌟',
-            onConfirm: () => setModal(null)
-          });
-          setTimeout(() => spawnFloat('🌟', '#fbbf24', x, y), 100);
-          setTimeout(() => spawnFloat('TUTORIAL COMPLETE!', '#4ade80', x, y + 30), 200);
-        } else if(isFirstPurchase){
+        if(isFirstPurchase){
           // 演出（初回購入のみ）
           const x = window.innerWidth/2;
           const y = window.innerHeight/2;
@@ -764,21 +861,6 @@ ${u.desc}
       };
 
       // actions
-      const onCollect = () => {
-        const gain = rates.clickData;
-        setState(p => ({...p, noise:(p.noise||0)+gain}));
-        const r = document.getElementById('action-area')?.getBoundingClientRect();
-        if(r) spawnFloat(`+${fmt(gain)} 💾`, '#4ade80', r.left+r.width*0.2, r.top);
-      };
-
-      const onAnalyze = () => {
-        if(state.noise < rates.clickResCost) return;
-        setState(p => ({...p, noise:(p.noise||0)-rates.clickResCost, research:(p.research||0)+rates.clickRes}));
-        const r = document.getElementById('action-area')?.getBoundingClientRect();
-        if(r) spawnFloat(`-💾${fmt(rates.clickResCost)} → +🔬${fmt(rates.clickRes)}`, '#60a5fa', r.left+r.width*0.55, r.top);
-      };
-
-
       const onReverse = () => {
         // リバース条件: AlphaOmegaファクター発見 + 最低限の成長が必要
         if(!state.discoveredFactorIds.includes('alphaomega')) return;
@@ -803,11 +885,11 @@ ${u.desc}
           title: '🚀 新惑星への投資 🚀',
           body: `${state.region === 0 ? '地球を出て' : ''}新しい惑星への投資を開始しますか？
 
-⚠️ 現在の運用資産、設備、データ、リサーチポイントは
+⚠️ 現在の運用資産、設備、データ、研究ポイントは
 すべて失われます。
 
-✨ しかし、市場の解明に必要なファクターポイントが減り、
-次の惑星ではより早く成長できます！`,
+✨ しかし、次の惑星ではファンドローンチで獲得できるお金が増え、
+より強力な成長が可能になります！`,
           buttonText: '🚀 参入開始',
           icon: '🌍',
           onConfirm: () => {
@@ -846,13 +928,21 @@ ${u.desc}
           const spectrumEl = document.getElementById('spectrum-area');
           const w = spectrumEl ? spectrumEl.clientWidth : 360;
 
+          // チュートリアル完了判定（機会生成頻度も削減）
+          const isTutorialComplete = gs.region === 0 && (lv['index_fund'] || 0) > 0;
+          const growthPenalty = (isTutorialComplete || gs.region > 0) ? 0.5 : 1.0;
+
           const strat = strats[(Math.random()*strats.length)|0];
           const lvl = lv[strat.id] || 0;
-          const freq = (strat.frequency||0.05) * 4 * Math.pow(1.1, lvl);
+          const freq = (strat.frequency||0.05) * 4 * Math.pow(1.1, lvl) * growthPenalty;
 
           if(Math.random() < freq){
             const f = FACTORS.find(x => x.id===strat.reqFactor) || {color:'#fff'};
-            const val = calcValue(strat.baseValue || 1, lvl);
+            const baseVal = calcValue(strat.baseValue || 1, lvl);
+            // リバース回数に応じてファンドローンチ値が増える（リバースの主な効果）
+            // チュートリアル中・完了後でもリバースしていない場合は乗数なし
+            const regionMultiplier = gs.region > 0 ? Math.pow(2.0, gs.region) : 1.0;
+            const val = baseVal * regionMultiplier;
             setOpps(p => (p.length>18 ? p : [...p, {id:Date.now()+Math.random(), x:w+40, color:f.color, val, status:'moving', scale:1}]));
           }
         }, 300);
@@ -891,10 +981,10 @@ ${u.desc}
               }
 
               const nextX = op.x - (120*dt);
-              // 常に自動でファンドローンチ（AUTOボタン不要、リサーチポイント不要）
+              // 常に自動でファンドローンチ（AUTOボタン不要、研究ポイント不要）
               const near = (op.x >= centerX-8 && nextX <= centerX+8);
               if(near){
-                // リサーチポイントのチェックを削除、単純にお金が入るだけ
+                // 研究ポイントのチェックを削除、単純にお金が入るだけ
                 collected += op.val;
                 launched++;
                 next.push({...op, x:centerX, status:'exploding', scale:1.2});
@@ -906,6 +996,8 @@ ${u.desc}
 
             for(const e of spawned){
               spawnFly(e.x, e.y);
+              // ファンドローンチのテキストと金額を表示
+              spawnFloat('ファンドローンチ', '#fbbf24', e.x, e.y - 20);
               spawnFloat(`+💰${fmt(e.val)}`, '#fbbf24', e.x, e.y);
             }
 
@@ -925,73 +1017,78 @@ ${u.desc}
             const r = calcRates(prev);
             let next = {...prev};
 
-            // 戦略の分散度（コンセントレーション比率）を計算
+            // 戦略の分散度（使用している異なるファクター数に基づく）
             const strategies = UPGRADES.filter(u => u.category === 'strategy' && (prev.levels[u.id] || 0) > 0);
-            let totalStrategyLevel = 0;
-            let strategyCount = 0;
-            const strategyLevels = {};
-            for(const s of strategies){
-              const lv = prev.levels[s.id] || 0;
-              totalStrategyLevel += lv;
-              strategyCount++;
-              strategyLevels[s.id] = lv;
-            }
             
-            // 分散度: 0-1 (1が完全分散、0が完全集中)
-            let diversification = 0;
-            if(strategyCount > 1 && totalStrategyLevel > 0){
-              // エントロピーに基づく分散度計算
-              let entropy = 0;
-              for(const s of strategies){
-                const p = strategyLevels[s.id] / totalStrategyLevel;
-                if(p > 0) entropy -= p * Math.log(p);
-              }
-              diversification = Math.min(1, entropy / Math.log(strategyCount));
-            } else if(strategyCount === 1){
-              diversification = 0; // 1つの戦略のみ = 完全集中
-            } else {
-              diversification = 1; // 戦略なし = 完全分散（影響なし）
+            // 使用している戦略が対応する異なるファクターの数をカウント
+            const usedFactors = new Set();
+            for(const s of strategies){
+              if(s.reqFactor) usedFactors.add(s.reqFactor);
             }
+            const uniqueFactorCount = usedFactors.size;
+            const totalFactorCount = FACTORS.length; // 全ファクター数（11個）
+            
+            // 分散度: 使用している異なるファクター数 / 全ファクター数
+            // 一種類のファンドを強化しても分散度は上がらない
+            const diversification = totalFactorCount > 0 ? uniqueFactorCount / totalFactorCount : 0;
             
             // マーケットイベントの処理
             const now = Date.now();
             let eventMultiplier = 1;
             let eventText = null;
             
-            // イベント発生チェック（Momentumファクター発見後、平均30秒に1回）
+            // イベント発生チェック（Momentumファクター発見後、平均60秒に1回に調整）
             const hasMomentum = prev.discoveredFactorIds.includes('momentum');
             if(hasMomentum && (!marketEvent || now - marketEvent.startTime > marketEvent.duration * 1000)){
-              const eventChance = 0.033 * dt; // 平均30秒に1回（100msごとに0.0033の確率）
+              const eventChance = 0.0167 * dt; // 平均60秒に1回（100msごとに0.00167の確率）
               if(Math.random() < eventChance){
                 const isCrash = Math.random() < 0.5;
-                const duration = 5 + Math.random() * 10; // 5-15秒
-                setMarketEvent({
+                const duration = 3 + Math.random() * 5; // 3-8秒に短縮
+                const newEvent = {
                   type: isCrash ? 'crash' : 'fever',
                   duration: duration,
                   startTime: now
-                });
+                };
+                setMarketEvent(newEvent);
+
+                // マーケットイベント発生時の演出（画面中央と運用資産付近にフロート表示）
+                const label = isCrash ? '📉 マーケットクラッシュ！' : '📈 マーケットフィーバー！';
+                spawnFloat(label, isCrash ? '#f97373' : '#4ade80', window.innerWidth/2, window.innerHeight/2 - 40);
+                const aumEl = document.getElementById('aum-anchor');
+                if(aumEl){
+                  const r = aumEl.getBoundingClientRect();
+                  spawnFloat(label, isCrash ? '#f97373' : '#4ade80', r.left + r.width/2, r.top - 10);
+                }
+
+                // ガイダンスを一度だけ起動（まだ完了しておらず、かつアクティブでない場合のみ設定）
+                // これにより、初回イベント発生時に確実にフラグが立つ
+                if(!marketEventGuidanceDone && !marketEventGuidanceActive){
+                  setMarketEventGuidanceActive(true);
+                }
               }
             }
             
-            // 現在のイベント効果を計算
+            // 現在のイベント効果を計算（バランス調整：効果を大幅に削減）
             if(marketEvent && now - marketEvent.startTime <= marketEvent.duration * 1000){
               const eventProgress = (now - marketEvent.startTime) / (marketEvent.duration * 1000);
               if(marketEvent.type === 'crash'){
-                // クラッシュ: -5%～-15%、分散度で軽減
-                const crashSeverity = 0.15 - (diversification * 0.1); // 完全分散で-5%、完全集中で-15%
+                // クラッシュ: -0.5%～-2%、分散度で軽減（大幅に削減）
+                const crashSeverity = 0.02 - (diversification * 0.015); // 完全分散で-0.5%、完全集中で-2%
                 eventMultiplier = 1 - (crashSeverity * (0.5 + 0.5 * Math.sin(eventProgress * Math.PI))); // 滑らかな変化
                 if(eventProgress < 0.1 || (eventProgress > 0.9 && Math.random() < 0.1)){
                   eventText = '📉 マーケットクラッシュ発生！';
                 }
               } else {
-                // フィーバー: +5%～+15%、分散度で増幅
-                const feverStrength = 0.05 + (diversification * 0.1); // 完全分散で+15%、完全集中で+5%
+                // フィーバー: +0.5%～+2%、分散度で増幅（大幅に削減）
+                const feverStrength = 0.005 + (diversification * 0.015); // 完全分散で+2%、完全集中で+0.5%
                 eventMultiplier = 1 + (feverStrength * (0.5 + 0.5 * Math.sin(eventProgress * Math.PI)));
                 if(eventProgress < 0.1 || (eventProgress > 0.9 && Math.random() < 0.1)){
                   eventText = '📈 マーケットフィーバー発生！';
                 }
               }
             } else if(marketEvent && now - marketEvent.startTime > marketEvent.duration * 1000){
+              // イベント終了時、終了時刻を記録
+              setLastEventEndTime(now);
               setMarketEvent(null);
             }
             
@@ -1021,10 +1118,23 @@ ${u.desc}
             }
             next.research = (prev.research||0) + resGain;
 
-            // factor discovery (リバース後は閾値が減る)
+            // factor discovery (閾値計算を統一)
             const nf = FACTORS.find(f => !prev.discoveredFactorIds.includes(f.id));
             if(nf){
-              const threshold = prev.region === 0 ? nf.threshold : Math.max(nf.threshold * 0.5, nf.threshold * (1 - Math.min(0.5, prev.region * 0.1)));
+              // getFactorThresholdと同じ計算ロジックを使用
+              const isTutorialComplete = prev.region === 0 && ((prev.levels.index_fund || 0) > 0);
+              let threshold;
+              if(prev.region === 0) {
+                if(isTutorialComplete) {
+                  const growth = calcExponentialGrowth(1, prev.discoveredFactorIds.length, 0, true);
+                  threshold = nf.threshold * growth;
+                } else {
+                  threshold = nf.threshold;
+                }
+              } else {
+                const baseIncrease = 1.0 + (prev.region * 0.1);
+                threshold = nf.threshold * baseIncrease;
+              }
               if(next.research >= threshold){
                 next.discoveredFactorIds = [...prev.discoveredFactorIds, nf.id];
               }
@@ -1139,6 +1249,59 @@ ${u.desc}
 
       const isStalled = rates.dataCons>0 && state.noise < 1 && rates.netData < 0;
       const progress = useMemo(() => nextFactor ? Math.min(100, (state.research/nextFactor.threshold)*100) : 100, [state.research, nextFactor]);
+      
+      // 分散効果を計算（実際に使用している戦略の種類数に基づく）
+      const diversificationInfo = useMemo(() => {
+        const strategies = UPGRADES.filter(u => u.category === 'strategy' && (state.levels[u.id] || 0) > 0);
+        const strategyCount = strategies.length;
+        
+        // 使用している戦略が対応する異なるファクターの数をカウント
+        const usedFactors = new Set();
+        for(const s of strategies){
+          if(s.reqFactor) usedFactors.add(s.reqFactor);
+        }
+        const uniqueFactorCount = usedFactors.size;
+        const totalFactorCount = FACTORS.length; // 全ファクター数（11個）
+        
+        // 分散度は使用している異なるファクター数 / 全ファクター数
+        // 一種類のファンドを強化しても分散度は上がらない
+        const diversification = totalFactorCount > 0 ? uniqueFactorCount / totalFactorCount : 0;
+        
+        return { diversification, strategyCount };
+      }, [state.levels, state.discoveredFactorIds]);
+      
+      // マーケットイベントのカウントダウン計算
+      const eventCountdown = useMemo(() => {
+        const hasMomentum = state.discoveredFactorIds.includes('momentum');
+        if(!hasMomentum) return null;
+        
+        const now = currentTime;
+        if(marketEvent && now - marketEvent.startTime <= marketEvent.duration * 1000){
+          // イベント中
+          const remaining = (marketEvent.duration * 1000) - (now - marketEvent.startTime);
+          return { active: true, remaining: remaining / 1000, type: marketEvent.type };
+        } else {
+          // 次のイベントまでのカウントダウン（平均60秒）
+          const avgInterval = 60; // 平均60秒
+
+          // 1) 直近のイベントが終了している場合：終了時刻からカウントダウン
+          if(lastEventEndTime) {
+            const elapsed = (now - lastEventEndTime) / 1000; // 経過秒数
+            const remaining = Math.max(0, avgInterval - elapsed);
+            return { active: false, remaining: remaining, avgInterval: avgInterval };
+          }
+
+          // 2) まだイベントが一度も発生していない場合：Momentumファクター発見時刻からカウントダウン
+          if(momentumFactorDiscoveredTime) {
+            const elapsed = (now - momentumFactorDiscoveredTime) / 1000; // 経過秒数
+            const remaining = Math.max(0, avgInterval - elapsed);
+            return { active: false, remaining: remaining, avgInterval: avgInterval };
+          }
+
+          // 3) フォールバック（通常はここには来ない）
+          return { active: false, remaining: avgInterval, avgInterval: avgInterval };
+        }
+      }, [marketEvent, state.discoveredFactorIds, currentTime, lastEventEndTime, momentumFactorDiscoveredTime]);
 
       return (
         <ErrorBoundary>
@@ -1192,11 +1355,11 @@ ${u.desc}
               {/* factor progress */}
               {nextFactor ? (
                 <div id="factor-gauge" className={`w-full flex items-center gap-2 mt-2 relative ${guidance?.highlight==='factor-gauge' ? 'hl' : ''}`}>
-                  <div className="text-[10px] text-gray-400 font-mono whitespace-nowrap">次: {nextFactor.name}</div>
+                  <div className="text-[10px] text-gray-400 font-mono whitespace-nowrap">次ファクター: {nextFactor.name}</div>
                   <div className={`flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden border border-gray-700 ${isStalled?'bg-red-900/20':''}`}>
                     <div className="bg-gradient-to-r from-blue-600 to-purple-500 h-full" style={{width:`${progress}%`}}></div>
                   </div>
-                  <div className="text-[10px] text-gray-500 font-mono">{fmt(nextFactor.threshold)} ポイント</div>
+                  <div className="text-[10px] text-gray-500 font-mono">{fmt(nextFactor.threshold)} 研究ポイント</div>
                   {guidance?.highlight==='factor-gauge' && <div className="arrow">👇</div>}
                 </div>
               ) : state.discoveredFactorIds.length >= FACTORS.length ? (
@@ -1204,6 +1367,34 @@ ${u.desc}
                   <div className="text-[10px] text-gray-400 font-mono">✨ すべてのファクターを発見しました！ ✨</div>
                 </div>
               ) : null}
+              
+              {/* 分散効果とマーケットイベント情報 */}
+              {diversificationInfo.strategyCount > 0 && (
+                <div id="diversification-info" className={`w-full flex items-center justify-between gap-2 mt-2 text-[10px] font-mono relative ${guidance?.highlight==='diversification-info' ? 'hl' : ''}`}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-400">分散度:</span>
+                    <div className="flex-1 bg-gray-800 rounded-full h-1.5 max-w-[120px] overflow-hidden border border-gray-700">
+                      <div className="bg-gradient-to-r from-green-600 to-blue-500 h-full" style={{width:`${(diversificationInfo.diversification * 100).toFixed(0)}%`}}></div>
+                    </div>
+                    <span className="text-gray-300">{(diversificationInfo.diversification * 100).toFixed(0)}%</span>
+                    <span className="text-gray-500">({diversificationInfo.strategyCount}戦略)</span>
+                  </div>
+                  {guidance?.highlight==='diversification-info' && <div className="arrow">👇</div>}
+                  {eventCountdown && (
+                    <div id="event-countdown" className={`flex items-center gap-1 relative ${eventCountdown.active ? (eventCountdown.type === 'crash' ? 'text-red-400' : 'text-green-400') : 'text-gray-400'} ${guidance?.highlight==='event-countdown' ? 'hl' : ''}`}>
+                      {eventCountdown.active ? (
+                        <>
+                          <span>{eventCountdown.type === 'crash' ? '📉' : '📈'}</span>
+                          <span>{(eventCountdown.remaining || 0).toFixed(1)}s</span>
+                        </>
+                      ) : (
+                        <span>次回イベント発生まで: {eventCountdown.remaining ? eventCountdown.remaining.toFixed(1) : eventCountdown.avgInterval}秒</span>
+                      )}
+                      {guidance?.highlight==='event-countdown' && <div className="arrow">👇</div>}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* SPECTRUM */}
@@ -1224,26 +1415,8 @@ ${u.desc}
               </div>
 
               {/* ACTION ROW (BOTTOM of spectrum block) */}
-              <div id="action-area" className="w-full bg-[#0b0f19] border-t border-gray-800 flex items-stretch justify-between gap-2 px-2 py-2">
-                <ActionButton
-                  icon="⛏️"
-                  label="収集"
-                  sub={`+${fmt(rates.clickData)} 💾`}
-                  onClick={onCollect}
-                  highlight={guidance?.highlight==='action-collect'}
-                />
-                {state.unlockedTabs.includes('research') && (
-                  <ActionButton
-                    icon="🔬"
-                    label="分析"
-                    sub={`-${fmt(rates.clickResCost)} 💾 → +${fmt(rates.clickRes)} 🔬`}
-                    onClick={onAnalyze}
-                    disabled={state.noise < rates.clickResCost}
-                    highlight={guidance?.highlight==='action-analyze'}
-                    tone="blue"
-                  />
-                )}
-                {state.discoveredFactorIds.includes('alphaomega') && (
+              {state.discoveredFactorIds.includes('alphaomega') && (
+                <div id="action-area" className="w-full bg-[#0b0f19] border-t border-gray-800 flex items-stretch justify-between gap-2 px-2 py-2">
                   <ActionButton
                     icon="🌍"
                     label="リバース"
@@ -1252,8 +1425,8 @@ ${u.desc}
                     tone="blue"
                     highlight={guidance?.highlight==='action-reverse'}
                   />
-                )}
-              </div>
+                </div>
+              )}
 
               {/* TABS (no overlap, no syntax bug) */}
               <div className="flex text-[11px] font-bold border-t border-gray-800 font-mono bg-gray-900">
@@ -1279,33 +1452,74 @@ ${u.desc}
               {UPGRADES.filter(u => u.category===activeTab).map(u => {
                 const lvl = state.levels[u.id]||0;
 
-                // lock strategies by factor
-                if(u.category==='strategy' && !u.autoUpgrade && u.reqFactor && !state.discoveredFactorIds.includes(u.reqFactor)) return null;
+                // 戦略のロック状態を判定（表示はするが、必要なファクターが発見されていない場合はロック）
+                const isLockedByFactor = u.category==='strategy' && !u.autoUpgrade && u.reqFactor && !state.discoveredFactorIds.includes(u.reqFactor);
                 
                 // リバースが必要なアイテムは常に表示（ロック状態で）
                 // reqRegionがある場合は表示するが、購入はできない
 
-                const costA = calcCost(u.baseCostAum || 0, u.costFactor, lvl);
-                const costR = calcCost(u.baseCostResearch || 0, u.costFactor, lvl);
+                // 指数関数的成長を考慮したコスト計算
+                const isTutorialComplete = state.region === 0 && (state.levels.index_fund || 0) > 0;
+                const growthMultiplier = calcExponentialGrowth(1, state.discoveredFactorIds.length, state.region, isTutorialComplete);
+                const costGrowth = (u.category === 'strategy' && (isTutorialComplete || state.region > 0)) ? growthMultiplier : 1.0;
+                let costA = calcCost(u.baseCostAum || 0, u.costFactor, lvl);
+                let costR = calcCost(u.baseCostResearch || 0, u.costFactor, lvl);
+                if(costGrowth > 1.0) {
+                  costA *= costGrowth;
+                  costR *= costGrowth;
+                }
                 const isLockedByRegion = u.reqRegion !== undefined && state.region < u.reqRegion;
                 const can = !isLockedByRegion && state.aum>=costA && state.research>=costR;
 
                 const hlCard = guidance?.highlight===`card-${u.id}`;
                 const hlBuy = guidance?.highlight===`buy-${u.id}`;
 
+                const maxBuy = calcMaxBuy(u);
+                const canBuy1 = !isLockedByFactor && !isLockedByRegion && state.aum>=costA && state.research>=costR;
+
+                // 現在のスピードと購入後のスピードを計算
+                let currentSpeed = null;
+                let afterSpeed = null;
+                // ファンドローンチでもらえる金額（現在と購入後）
+                let currentLaunchValue = null;
+                let afterLaunchValue = null;
+                
+                if(!u.autoUpgrade && canBuy1) {
+                  const currentRates = calcRates(state);
+                  const afterState = { ...state, levels: { ...state.levels, [u.id]: lvl + 1 } };
+                  const afterRates = calcRates(afterState);
+                  
+                  if(u.category === 'data') {
+                    currentSpeed = currentRates.dataProd;
+                    afterSpeed = afterRates.dataProd;
+                  } else if(u.category === 'research') {
+                    currentSpeed = currentRates.resProd;
+                    afterSpeed = afterRates.resProd;
+                  } else if(u.category === 'strategy') {
+                    currentSpeed = currentRates.passive * 100; // パーセント表示
+                    afterSpeed = afterRates.passive * 100;
+                    // ファンドローンチでもらえる金額を計算（リバース乗数を考慮）
+                    const regionMultiplier = state.region > 0 ? Math.pow(2.0, state.region) : 1.0;
+                    currentLaunchValue = calcValue(u.baseValue || 1, lvl) * regionMultiplier;
+                    afterLaunchValue = calcValue(u.baseValue || 1, lvl + 1) * regionMultiplier;
+                  }
+                }
+
+                // 現在のレベルを反映した実際の速度を計算
+                const currentDataRate = u.category === 'data' && !u.autoUpgrade ? (u.effectVal || 0) * lvl : 0;
+                const currentResearchRate = u.category === 'research' && !u.autoUpgrade ? (u.outputResearch || 0) * lvl : 0;
+                const currentResearchCons = u.category === 'research' && !u.autoUpgrade ? (u.inputNoise || 0) * lvl : 0;
+                
                 const footerLeft = u.category==='strategy' && !u.autoUpgrade
-                  ? `Val $${fmt(calcValue(u.baseValue || 1, lvl))}`
+                  ? (isLockedByFactor ? '🔒 ロック中' : `ファンドローンチ: 💰${fmt(currentLaunchValue || calcValue(u.baseValue || 1, lvl) * (state.region > 0 ? Math.pow(2.0, state.region) : 1.0))}`)
                   : u.category==='research' && !u.autoUpgrade
-                    ? `データ→リサーチ  +${fmt((u.outputResearch||0))}🔬/s  (消費 ${fmt((u.inputNoise||0))}💾/s)`
+                    ? `データ→リサーチ  +${fmt(currentResearchRate)}🔬/s  (消費 ${fmt(currentResearchCons)}💾/s)`
                     : u.category==='data' && !u.autoUpgrade
-                      ? `+${fmt((u.effectVal||0))} 💾/s`
+                      ? `+${fmt(currentDataRate)} 💾/s`
                       : u.autoUpgrade
                         ? `リバース${u.reqRegion}回で解放`
                         : '';
-
-                const maxBuy = calcMaxBuy(u);
-                const canBuy1 = !isLockedByRegion && state.aum>=costA && state.research>=costR;
-                const canBuyMax = !isLockedByRegion && maxBuy > 0;
+                const canBuyMax = !isLockedByFactor && !isLockedByRegion && maxBuy > 0;
 
                 return (
                   <div
@@ -1316,13 +1530,37 @@ ${u.desc}
                       <div className="flex gap-3 items-center">
                         <div className="text-2xl w-8 text-center">{u.icon}</div>
                         <div>
-                          <div className="font-bold text-sm text-gray-200">{u.name} <span className="text-[10px] text-gray-500 ml-1">{lvl > 0 ? `Lv.${lvl}` : u.reqRegion !== undefined && state.region < u.reqRegion ? `🔒 惑星${u.reqRegion}で解放` : '🔒 ロック中'}</span></div>
+                          <div className="font-bold text-sm text-gray-200">{u.name} <span className="text-[10px] text-gray-500 ml-1">{lvl > 0 ? `Lv.${lvl}` : u.reqRegion !== undefined && state.region < u.reqRegion ? `🔒 惑星${u.reqRegion}で解放` : isLockedByFactor ? `🔒 ロック中` : '🔒 ロック中'}</span></div>
                           <div className="text-[10px] text-gray-400 leading-tight">{u.desc}</div>
+                          {isLockedByFactor && u.reqFactor && (() => {
+                            const requiredFactor = FACTORS.find(f => f.id === u.reqFactor);
+                            return requiredFactor ? (
+                              <div className="text-[10px] text-orange-400 mt-1 font-bold">
+                                🔒 {requiredFactor.name}ファクターの発見が必要
+                              </div>
+                            ) : null;
+                          })()}
                         </div>
                       </div>
                     </div>
                     <div className="px-2 py-2 bg-black/20 border-t border-white/5 flex justify-between items-center text-[10px] font-mono">
-                      <div className="text-gray-300">{footerLeft}</div>
+                      <div className="flex flex-col gap-1">
+                        <div className="text-gray-300">{footerLeft}</div>
+                        {currentSpeed !== null && afterSpeed !== null && (
+                          <div className="text-gray-400">
+                            {u.category === 'data' && `💾 ${fmt(currentSpeed)}/s → ${fmt(afterSpeed)}/s`}
+                            {u.category === 'research' && `🔬 ${fmt(currentSpeed)}/s → ${fmt(afterSpeed)}/s`}
+                            {u.category === 'strategy' && (
+                              <>
+                                {currentLaunchValue !== null && afterLaunchValue !== null && (
+                                  <div>💰 {fmt(currentLaunchValue)} → {fmt(afterLaunchValue)}</div>
+                                )}
+                                <div>📈 {currentSpeed.toFixed(3)}%/s → {afterSpeed.toFixed(3)}%/s</div>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
                       <div className="flex gap-2">
                         {costA>0 && <span className={state.aum>=costA?'text-gray-300':'text-red-400'}>💰{fmt(costA)}</span>}
                         {costR>0 && <span className={state.research>=costR?'text-blue-300':'text-red-400'}>🔬{fmt(costR)}</span>}
@@ -1334,7 +1572,7 @@ ${u.desc}
                         disabled={!canBuy1}
                         className={`flex-1 py-1.5 px-2 rounded-lg text-[10px] font-mono font-bold transition-all relative ${canBuy1 ? 'bg-blue-600 text-white active:scale-[0.98]' : 'bg-gray-800 text-gray-500 cursor-not-allowed'} ${hlBuy ? 'hl' : ''}`}
                       >
-                        購入×1
+                        {u.category === 'strategy' ? '開発×1' : '購入×1'}
                         {hlBuy && <div className="arrow">👇</div>}
                       </button>
                       <button
@@ -1342,7 +1580,7 @@ ${u.desc}
                         disabled={!canBuyMax}
                         className={`flex-1 py-1.5 px-2 rounded-lg text-[10px] font-mono font-bold transition-all ${canBuyMax ? 'bg-green-600 text-white active:scale-[0.98]' : 'bg-gray-800 text-gray-500 cursor-not-allowed'}`}
                       >
-                        MAX購入({maxBuy})
+                        {u.category === 'strategy' ? `MAX開発(${maxBuy})` : `MAX購入(${maxBuy})`}
                       </button>
                     </div>
                     {hlCard && <div className="arrow">👇</div>}
@@ -1368,21 +1606,46 @@ ${u.desc}
                       if(guidance.skipKey) {
                         setGuidanceSkipped(prev => new Set([...prev, guidance.skipKey]));
                         // スキップ時に次のステップに進むための条件を満たす
-                        if(guidance.skipKey === 'data-explanation') {
-                          // 手動収集後のDATA説明をスキップ → インターン購入ステップに進む
-                          setState(p => ({...p, noise: Math.max(p.noise || 0, 35)}));
-                        } else if(guidance.skipKey === 'auto-data-explanation') {
-                          // インターン購入後のDATA説明をスキップ → 次のステップに進む（noiseを10以上に）
+                        if(guidance.skipKey === 'auto-data-explanation') {
+                          // インターン購入後のDATA説明をスキップ → 次のステップに進む
                           setState(p => ({...p, noise: Math.max(p.noise || 0, 10)}));
                         } else if(guidance.skipKey === 'research-explanation') {
-                          // RESEARCH説明をスキップ → アナリスト購入ステップに進む
-                          setState(p => ({...p, research: Math.max(p.research || 0, 15)}));
+                          // 研究ポイント説明をスキップ → 次のステップに進む（researchを10以上に）
+                          setState(p => ({...p, research: Math.max(p.research || 0, 10)}));
                         } else if(guidance.skipKey === 'factor-gauge-explanation') {
-                          // ファクターゲージ説明をスキップ → 次のステップに進む（researchを25に近づける）
-                          setState(p => ({...p, research: Math.max(p.research || 0, 24)}));
+                          // ファクターゲージ説明をスキップ → 次のステップに進む（researchを20に近づける）
+                          setState(p => ({...p, research: Math.max(p.research || 0, 19)}));
                         } else if(guidance.skipKey === 'aum-explanation') {
                           // 運用資産説明をスキップ → 次のステップに進む
                           setState(p => ({...p, aum: Math.max(p.aum || 0, 1500)}));
+                        } else if(guidance.skipKey === 'aum-growth-confirm') {
+                          // 運用資産増加確認をスキップ → 次のステップに進む
+                          setState(p => ({...p, aum: Math.max(p.aum || 0, 2000)}));
+                        } else if(guidance.skipKey === 'market-event-diversification') {
+                          // マーケットイベントガイダンス完了 → 今後表示しない
+                          setMarketEventGuidanceActive(false);
+                          setMarketEventGuidanceDone(true);
+                        } else if(guidance.skipKey === 'tutorial-complete') {
+                          // チュートリアル完了確認をスキップ → チュートリアル完了モーダルを表示
+                          const x = window.innerWidth/2;
+                          const y = window.innerHeight/2;
+                          setModal({
+                            title: '🎓 チュートリアル完了！ 🎓',
+                            body: `おめでとうございます！
+
+チュートリアルが完了しました。
+
+このように市場の仕組み＝ファクターを解明していき、
+どんどんファンドでお金を集め、
+世界一の運用会社を作りましょう！
+
+🚀 ゲームを楽しんでください！`,
+                            buttonText: '🚀 ゲーム開始',
+                            icon: '🌟',
+                            onConfirm: () => setModal(null)
+                          });
+                          setTimeout(() => spawnFloat('🌟', '#fbbf24', x, y), 100);
+                          setTimeout(() => spawnFloat('TUTORIAL COMPLETE!', '#4ade80', x, y + 30), 200);
                         }
                       }
                     }}

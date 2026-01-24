@@ -444,6 +444,7 @@
 
       const stateRef = useRef(state);
       const lastLoopRef = useRef(Date.now());
+      const nextEventTimeRef = useRef(null); // 次回のマーケットイベント発生時刻
       useEffect(() => { stateRef.current = state; }, [state]);
 
       const rates = useMemo(() => calcRates(state), [state]);
@@ -1037,11 +1038,17 @@ ${u.desc}
             let eventMultiplier = 1;
             let eventText = null;
             
-            // イベント発生チェック（Momentumファクター発見後、平均60秒に1回に調整）
+            // イベント発生チェック（Momentumファクター発見後、60秒ごとに確定発生）
             const hasMomentum = prev.discoveredFactorIds.includes('momentum');
+            
+            // 初回または再開時のスケジュール設定
+            if(hasMomentum && nextEventTimeRef.current === null && !marketEvent){
+               nextEventTimeRef.current = now + 60000;
+            }
+
             if(hasMomentum && (!marketEvent || now - marketEvent.startTime > marketEvent.duration * 1000)){
-              const eventChance = 0.0167 * dt; // 平均60秒に1回（100msごとに0.00167の確率）
-              if(Math.random() < eventChance){
+              // カウントダウン完了でイベント発生
+              if(nextEventTimeRef.current && now >= nextEventTimeRef.current){
                 const isCrash = Math.random() < 0.5;
                 const duration = 3 + Math.random() * 5; // 3-8秒に短縮
                 const newEvent = {
@@ -1065,6 +1072,9 @@ ${u.desc}
                 if(!marketEventGuidanceDone && !marketEventGuidanceActive){
                   setMarketEventGuidanceActive(true);
                 }
+                
+                // 次回予定はいったんクリア（イベント終了時に再設定）
+                nextEventTimeRef.current = null;
               }
             }
             
@@ -1090,6 +1100,8 @@ ${u.desc}
               // イベント終了時、終了時刻を記録
               setLastEventEndTime(now);
               setMarketEvent(null);
+              // 次回イベントを60秒後にスケジュール
+              nextEventTimeRef.current = now + 60000;
             }
             
             // イベントテキスト表示
@@ -1281,27 +1293,16 @@ ${u.desc}
           const remaining = (marketEvent.duration * 1000) - (now - marketEvent.startTime);
           return { active: true, remaining: remaining / 1000, type: marketEvent.type };
         } else {
-          // 次のイベントまでのカウントダウン（平均60秒）
-          const avgInterval = 60; // 平均60秒
-
-          // 1) 直近のイベントが終了している場合：終了時刻からカウントダウン
-          if(lastEventEndTime) {
-            const elapsed = (now - lastEventEndTime) / 1000; // 経過秒数
-            const remaining = Math.max(0, avgInterval - elapsed);
-            return { active: false, remaining: remaining, avgInterval: avgInterval };
+          // 次のイベントまでのカウントダウン（確定60秒）
+          if (nextEventTimeRef.current) {
+             const remaining = Math.max(0, (nextEventTimeRef.current - now) / 1000);
+             return { active: false, remaining: remaining, avgInterval: 60 };
           }
-
-          // 2) まだイベントが一度も発生していない場合：Momentumファクター発見時刻からカウントダウン
-          if(momentumFactorDiscoveredTime) {
-            const elapsed = (now - momentumFactorDiscoveredTime) / 1000; // 経過秒数
-            const remaining = Math.max(0, avgInterval - elapsed);
-            return { active: false, remaining: remaining, avgInterval: avgInterval };
-          }
-
-          // 3) フォールバック（通常はここには来ない）
-          return { active: false, remaining: avgInterval, avgInterval: avgInterval };
+          
+          // まだスケジュールされていない場合（通常はここには来ないが、初期化待ちなど）
+          return { active: false, remaining: 60, avgInterval: 60 };
         }
-      }, [marketEvent, state.discoveredFactorIds, currentTime, lastEventEndTime, momentumFactorDiscoveredTime]);
+      }, [marketEvent, state.discoveredFactorIds, currentTime]);
 
       return (
         <ErrorBoundary>
@@ -1597,41 +1598,42 @@ ${u.desc}
 
             {/* Guidance bar */}
             {guidance && (
-              <div className="guidance-bar fixed bottom-0 left-0 right-0 bg-gradient-to-r from-yellow-500/95 via-orange-500/95 to-yellow-500/95 border-t-4 border-yellow-400 py-3 px-2 z-50 flex items-center justify-center gap-2 backdrop-blur-sm min-h-[60px]">
-                <span className="text-2xl animate-pulse shrink-0">💡</span>
-                <span className="text-sm font-bold text-gray-900 tracking-wide text-center px-1 drop-shadow-[0_2px_4px_rgba(0,0,0,0.3)] break-words leading-relaxed flex-1">{guidance.text}</span>
-                {guidance.skipable ? (
-                  <button
-                    onClick={() => {
-                      if(guidance.skipKey) {
-                        setGuidanceSkipped(prev => new Set([...prev, guidance.skipKey]));
-                        // スキップ時に次のステップに進むための条件を満たす
-                        if(guidance.skipKey === 'auto-data-explanation') {
-                          // インターン購入後のDATA説明をスキップ → 次のステップに進む
-                          setState(p => ({...p, noise: Math.max(p.noise || 0, 10)}));
-                        } else if(guidance.skipKey === 'research-explanation') {
-                          // 研究ポイント説明をスキップ → 次のステップに進む（researchを10以上に）
-                          setState(p => ({...p, research: Math.max(p.research || 0, 10)}));
-                        } else if(guidance.skipKey === 'factor-gauge-explanation') {
-                          // ファクターゲージ説明をスキップ → 次のステップに進む（researchを20に近づける）
-                          setState(p => ({...p, research: Math.max(p.research || 0, 19)}));
-                        } else if(guidance.skipKey === 'aum-explanation') {
-                          // 運用資産説明をスキップ → 次のステップに進む
-                          setState(p => ({...p, aum: Math.max(p.aum || 0, 1500)}));
-                        } else if(guidance.skipKey === 'aum-growth-confirm') {
-                          // 運用資産増加確認をスキップ → 次のステップに進む
-                          setState(p => ({...p, aum: Math.max(p.aum || 0, 2000)}));
-                        } else if(guidance.skipKey === 'market-event-diversification') {
-                          // マーケットイベントガイダンス完了 → 今後表示しない
-                          setMarketEventGuidanceActive(false);
-                          setMarketEventGuidanceDone(true);
-                        } else if(guidance.skipKey === 'tutorial-complete') {
-                          // チュートリアル完了確認をスキップ → チュートリアル完了モーダルを表示
-                          const x = window.innerWidth/2;
-                          const y = window.innerHeight/2;
-                          setModal({
-                            title: '🎓 チュートリアル完了！ 🎓',
-                            body: `おめでとうございます！
+              <div 
+                className={`guidance-bar fixed bottom-0 left-0 right-0 bg-gradient-to-r from-yellow-500/95 via-orange-500/95 to-yellow-500/95 border-t-4 border-yellow-400 py-3 px-2 z-50 flex items-center justify-center gap-2 backdrop-blur-sm min-h-[60px] ${guidance.skipable ? 'cursor-pointer active:scale-[0.99] transition-transform' : ''}`}
+                onClick={() => {
+                  if(!guidance.skipable) return;
+                  // factor-gauge-explanation check
+                  if(guidance.skipKey === 'factor-gauge-explanation' && !state.discoveredFactorIds.includes('beta')) return;
+
+                  if(guidance.skipKey) {
+                    setGuidanceSkipped(prev => new Set([...prev, guidance.skipKey]));
+                    // スキップ時に次のステップに進むための条件を満たす
+                    if(guidance.skipKey === 'auto-data-explanation') {
+                      // インターン購入後のDATA説明をスキップ → 次のステップに進む
+                      setState(p => ({...p, noise: Math.max(p.noise || 0, 10)}));
+                    } else if(guidance.skipKey === 'research-explanation') {
+                      // 研究ポイント説明をスキップ → 次のステップに進む（researchを10以上に）
+                      setState(p => ({...p, research: Math.max(p.research || 0, 10)}));
+                    } else if(guidance.skipKey === 'factor-gauge-explanation') {
+                      // ファクターゲージ説明をスキップ → 次のステップに進む（researchを20に近づける）
+                      setState(p => ({...p, research: Math.max(p.research || 0, 19)}));
+                    } else if(guidance.skipKey === 'aum-explanation') {
+                      // 運用資産説明をスキップ → 次のステップに進む
+                      setState(p => ({...p, aum: Math.max(p.aum || 0, 1500)}));
+                    } else if(guidance.skipKey === 'aum-growth-confirm') {
+                      // 運用資産増加確認をスキップ → 次のステップに進む
+                      setState(p => ({...p, aum: Math.max(p.aum || 0, 2000)}));
+                    } else if(guidance.skipKey === 'market-event-diversification') {
+                      // マーケットイベントガイダンス完了 → 今後表示しない
+                      setMarketEventGuidanceActive(false);
+                      setMarketEventGuidanceDone(true);
+                    } else if(guidance.skipKey === 'tutorial-complete') {
+                      // チュートリアル完了確認をスキップ → チュートリアル完了モーダルを表示
+                      const x = window.innerWidth/2;
+                      const y = window.innerHeight/2;
+                      setModal({
+                        title: '🎓 チュートリアル完了！ 🎓',
+                        body: `おめでとうございます！
 
 チュートリアルが完了しました。
 
@@ -1640,27 +1642,28 @@ ${u.desc}
 世界一の運用会社を作りましょう！
 
 🚀 ゲームを楽しんでください！`,
-                            buttonText: '🚀 ゲーム開始',
-                            icon: '🌟',
-                            onConfirm: () => setModal(null)
-                          });
-                          setTimeout(() => spawnFloat('🌟', '#fbbf24', x, y), 100);
-                          setTimeout(() => spawnFloat('TUTORIAL COMPLETE!', '#4ade80', x, y + 30), 200);
-                        }
-                      }
-                    }}
-                    disabled={guidance.skipKey === 'factor-gauge-explanation' && !state.discoveredFactorIds.includes('beta')}
-                    className={`shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold active:scale-95 transition-all border-2 border-yellow-400 shadow-lg ${
-                      guidance.skipKey === 'factor-gauge-explanation' && !state.discoveredFactorIds.includes('beta')
-                        ? 'bg-gray-700 text-gray-400 cursor-not-allowed border-gray-600'
-                        : 'bg-gray-900 text-white hover:bg-gray-800'
-                    }`}
-                  >
-                    次へ →
-                  </button>
-                ) : (
-                  <span className="text-2xl animate-pulse shrink-0">👉</span>
-                )}
+                        buttonText: '🚀 ゲーム開始',
+                        icon: '🌟',
+                        onConfirm: () => setModal(null)
+                      });
+                      setTimeout(() => spawnFloat('🌟', '#fbbf24', x, y), 100);
+                      setTimeout(() => spawnFloat('TUTORIAL COMPLETE!', '#4ade80', x, y + 30), 200);
+                    }
+                  }
+                }}
+              >
+                <span className="text-2xl animate-pulse shrink-0">💡</span>
+                <span className="text-sm font-bold text-gray-900 tracking-wide text-center px-1 drop-shadow-[0_2px_4px_rgba(0,0,0,0.3)] break-words leading-relaxed flex-1">
+                  {guidance.text}
+                  {guidance.skipable && (
+                    <span className="block text-[10px] opacity-60 font-normal mt-1">
+                      {guidance.skipKey === 'factor-gauge-explanation' && !state.discoveredFactorIds.includes('beta') 
+                        ? '(Beta発見で進行)' 
+                        : '（タップして次へ）'}
+                    </span>
+                  )}
+                </span>
+                {!guidance.skipable && <span className="text-2xl animate-pulse shrink-0">👉</span>}
               </div>
             )}
 
